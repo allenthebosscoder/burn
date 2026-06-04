@@ -1,0 +1,12 @@
+[package]
+name = "my-guide"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+version.workspace = true
+
+[dependencies]
+burn = { workspace = true, features = ["std", "tui", "train", "vision", "wgpu", "fusion"], default-features = false }
+
+[lints]
+workspace = true

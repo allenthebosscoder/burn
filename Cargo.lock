@@ -5414,6 +5414,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc0287524726960e07b119cebd01678f852f147742ae0d925e6a520dca956126"
 
 [[package]]
+name = "my-guide"
+version = "0.22.0-pre.1"
+dependencies = [
+ "burn",
+]
+
+[[package]]
+name = "my_burn_app"
+version = "0.22.0-pre.1"
+dependencies = [
+ "burn",
+]
+
+[[package]]
 name = "naga"
 version = "29.0.0"
 source = "git+https://github.com/gfx-rs/wgpu.git?rev=bde709122f8320571ab1733ab055dcb54415a483#bde709122f8320571ab1733ab055dcb54415a483"

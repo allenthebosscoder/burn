@@ -1,0 +1,12 @@
+[package]
+name = "my_burn_app"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+version.workspace = true
+
+[dependencies]
+burn = { workspace = true, features = ["wgpu"] }
+
+[lints]
+workspace = true
