@@ -16,7 +16,7 @@ impl Batcher<MnistItem, MnistBatch> for MnistBatcher {
     fn batch(&self, items: Vec<MnistItem>, device: &Device) -> MnistBatch {
         let images = items                                              // take items Vec<MnistItem>
             .iter()                                                     // create an iterator over it
-            .map(|item| TensorData::rom(item.image))                    // for each item, convert the image to float data struct
+            .map(|item| TensorData::from(item.image))                   // for each item, convert the image to float data struct
             .map(|data| Tensor::<2>::from_data(data, device))           // for each data struct, create a tensor on the device
             .map(|tensor| tensor.reshape([1, 28, 28]))                  // for each tensor, reshape to the image dimensions [C, H, W]
             // Normalize: scale between [0,1] and make the mean=0 and std=1
