@@ -1,7 +1,7 @@
 use burn::{
     data::{dataloader::batcher::Batcher, dataset::vision::MnistItem},
     prelude::*,
-}
+};
 
 #[derive(Clone, Default)]
 pub struct MnistBatcher {}
@@ -31,7 +31,7 @@ impl Batcher<MnistItem, MnistBatch> for MnistBatcher {
             .collect();
         
         let images = Tensor::cat(images, 0);
-        let targets = Tensor::cat(images, 0);
+        let targets = Tensor::cat(targets, 0);
 
         MnistBatch { images, targets }
     }

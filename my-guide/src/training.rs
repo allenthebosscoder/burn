@@ -55,7 +55,7 @@ pub struct TrainingConfig {
     pub model: ModelConfig,
     pub optimizer: AdamConfig,
     #[config(default = 10)]
-    pub num_epochs: usize,
+    pub num_epochs: usize,          // Epoch: one complete pass through dataset
     #[config(default = 64)]
     pub batch_size: usize,
     #[config(default = 4)]
@@ -73,42 +73,52 @@ fn create_artifact_dir(artifact_dir: &str) {
 }
 
 pub fn train(artifact_dir: &str, config: TrainingConfig, device: impl Into<Device>) {
+    
+    // Create artifact directory and save training config
     create_artifact_dir(artifact_dir);
     config
         .save(format!("{artifact_dir}/config.json"))
         .expect("Config should be saved successfully");
 
+    // Converts the device passed into function to a real Device
     let device = device.into();
-    device.seed(config.seed);
-    let autodiff_device = device.clone().autodiff();
+    device.seed(config.seed);                                       // sets random seed
+    let autodiff_device = device.clone().autodiff();                // creates version of device that supports gradients
 
-    let batcher = MnistBatcher::default();
+    let batcher = MnistBatcher::default();                          // creates batcher that can convert MnistItem to MnistBatch
 
-    let dataloader_train = DataLoaderBuilder::new(batcher.clone())
-        .batch_size(config.batch_size)
-        .shuffle(config.seed)
-        .num_workers(config.num_workers)
-        .build(MnistDataset::train());
+    // Create iterator over TRAINING batches. Output: MnistBatch
+    let dataloader_train = DataLoaderBuilder::new(batcher.clone())  // use this batcher to convert items to batches
+        .batch_size(config.batch_size)                              // batch size from config
+        .shuffle(config.seed)                                       // shuffle based on seeds
+        .num_workers(config.num_workers)                            // use N worker threads
+        .build(MnistDataset::train());                              // read from MNIST training set
 
-    let dataloader_test = DataLoaderBuilder::new(batcher)
-        .batch_size(config.batch_size)
-        .shuffle(config.seed)
-        .num_workers(config.num_workers)
-        .build(MnistDataset::test());
+    // Create iterator over TEST batches. Output: MnistBatch
+    let dataloader_test = DataLoaderBuilder::new(batcher)           // use this batcher to convert items to batches
+        .batch_size(config.batch_size)                              // batch size from config
+        .shuffle(config.seed)                                       // shuffle based on seeds
+        .num_workers(config.num_workers)                            // use N worker threads
+        .build(MnistDataset::test());                               // read from MNIST test set
 
-    let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
-        .metrics((AccuracyMetric::new(), LossMetric::new()))
-        .with_file_checkpointer(CompactRecorder::new())
-        .num_epochs(config.num_epochs)
-        .summary();
+    // Configure training loop: data, metrics, checkpointing, epochs, summary
+    let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test) // create training runner that knows where to store files and what batches to train and test on
+        .metrics((AccuracyMetric::new(), LossMetric::new()))        // track accuracy and loss during training/evaluation
+        .with_file_checkpointer(CompactRecorder::new())             // save checkpoints to disk
+        .num_epochs(config.num_epochs)                              // run through full dataset multiple times
+        .summary();                                                 // prep summary of training setup/results
 
-    let model = config.model.init(&autodiff_device);
+    let model = config.model.init(&autodiff_device);                // create model with weights on a device that supports gradients
+    
+    // Create learner containg model, Adam optimizer, and learning rate
+    // This is where actual training loop runs
     let result = training.launch(Learner::new(
         model,
         config.optimizer.init(),
         config.learning_rate,
     ));
 
+    // save the final trained model weights to disk
     result
         .model
         .save_file(format!("{artifact_dir}/model"), &CompactRecorder::new())
