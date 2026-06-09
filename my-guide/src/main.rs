@@ -11,16 +11,25 @@ fn main() {
     let device = Device::wgpu(DeviceKind::DefaultDevice);
 
     // Create model and print it
-    let model = ModelConfig::new(10, 512).init(&device);
-    println!("{model}");
+    // let model = ModelConfig::new(10, 512).init(&device);
+    // println!("{model}");
 
     // All the training artifacts will be saved in this directory
     let artifact_dir = "artifacts";
 
     // Train the model
-    training::train(
+    // training::train(
+    //     artifact_dir,
+    //     TrainingConfig::new(ModelConfig::new(10, 512), AdamConfig::new()),
+    //     device.clone(),
+    // );
+
+    // Infer the model
+    inference::infer(
         artifact_dir,
-        TrainingConfig::new(ModelConfig::new(10, 512), AdamConfig::new()),
-        device.clone(),
+        device,
+        burn::data::dataset::vision::MnistDataset::test()
+            .get(4365)
+            .unwrap(),
     );
 }
