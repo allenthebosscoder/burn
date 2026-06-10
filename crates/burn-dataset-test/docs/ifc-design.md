@@ -6,7 +6,7 @@ Integrate Filament-style Information Flow Control (IFC) into Burn.
 
 The objective is to track sensitive training data as it flows through Burn's machine learning pipeline.
 
-The security lattice consist of only two labels:
+The security lattice currently consists of:
 
 ```text
 Public
@@ -19,15 +19,11 @@ where:
 Public ⊑ Secret
 ```
 
-Any computation derived from Secret data should also be considered Secret unless explicitly declassified.
+Any value derived from Secret data should also be considered Secret unless explicitly declassified.
 
----
+The goal is to identify where user-provided data enters Burn and introduce IFC labels at those boundaries.
 
-# Design Philosophy
-
-The primary goal is to identify where user-provided data enters the Burn framework and introduce IFC labels at that point.
-
-Labels should then propagate naturally through the system.
+Once data becomes labeled, labels should propagate naturally through the rest of the framework.
 
 ---
 
@@ -39,6 +35,8 @@ Current Burn pipeline:
 
 ```text
 Dataset
+    ↓
+Dataset Transforms
     ↓
 Iterator
     ↓
@@ -57,7 +55,7 @@ Gradients
 Parameters
 ```
 
-Therefore the Dataset abstraction is treated as the IFC entry point.
+Therefore the Dataset abstraction is treated as the primary IFC entry point.
 
 ---
 
@@ -77,7 +75,7 @@ Example:
 Dataset<MnistItem>
 ```
 
-The Dataset trait originally returned:
+The Dataset trait returned:
 
 ```rust
 Option<I>
@@ -93,7 +91,7 @@ get()
 
 ## IFC Dataset Design
 
-Datasets are now parameterized by both:
+Datasets are now parameterized by:
 
 ```rust
 Dataset<I, L>
@@ -110,11 +108,11 @@ Example:
 Dataset<MnistItem, Secret>
 ```
 
-This represents a dataset whose contents are Secret.
+This represents a dataset containing Secret information.
 
 ---
 
-# Dataset Retrieval
+## Dataset Retrieval
 
 The Dataset trait was modified from:
 
@@ -138,81 +136,9 @@ inherits the dataset label.
 
 ---
 
-# Labeling Strategy: Immediate Labeling
-
-Store:
-
-```rust
-Vec<Labeled<I, L>>
-```
-
-inside the dataset.
-
-Example:
-
-```text
-User Data
-    ↓
-Labeled<I, L>
-    ↓
-Stored
-    ↓
-Retrieved
-```
-
-The project requirement is that data should become labeled immediately when it enters Burn.
-
-This prevents unlabeled user data from existing within Burn's internal storage structures.
-
----
-
-# InMemDataset Changes
-
-Original:
-
-```rust
-pub struct InMemDataset<I> {
-    items: Vec<I>,
-}
-```
-
-Modified:
-
-```rust
-pub struct InMemDataset<I, L: Label> {
-    items: Vec<Labeled<I, L>>,
-}
-```
-
-All items stored by the dataset are now labeled.
-
----
-
-# Dataset Iterator
-
-Original iterator design:
-
-```rust
-Iterator<Item = I>
-```
-
-IFC design:
-
-```rust
-Iterator<Item = Labeled<I, L>>
-```
-
-Reason:
-
-Labels must be preserved while iterating through a dataset.
-
-The iterator should never strip labels.
-
----
-
 # Dataset Transforms
 
-The following Burn components consume Dataset:
+Several Burn abstractions operate on top of an existing dataset:
 
 ```text
 DatasetIterator
@@ -224,9 +150,9 @@ SamplerDataset
 MapperDataset
 ```
 
-These transforms are expected to preserve labels.
+These consume one dataset and produce another.
 
-For example:
+Example:
 
 ```text
 Dataset<I, Secret>
@@ -236,7 +162,247 @@ ShuffleDataset
 Dataset<I, Secret>
 ```
 
-No declassification should occur during dataset transformations.
+---
+
+## IFC Design
+
+Dataset transforms must preserve labels.
+
+Transforms are not allowed to:
+
+- remove labels
+- downgrade labels
+- declassify data
+
+They only modify how data is accessed.
+
+Example:
+
+```text
+Dataset<I, Secret>
+    ↓
+SelectionDataset
+    ↓
+Dataset<I, Secret>
+```
+
+```text
+Dataset<I, Secret>
+    ↓
+WindowDataset
+    ↓
+Dataset<I, Secret>
+```
+
+The security level of the dataset should remain unchanged.
+
+---
+
+# InMemDataset
+
+InMemDataset stores records directly in memory.
+
+Because user data already exists inside Burn memory, labels must be attached immediately.
+
+---
+
+## Original Design
+
+```rust
+pub struct InMemDataset<I> {
+    items: Vec<I>,
+}
+```
+
+Records were stored as raw values.
+
+---
+
+## IFC Design
+
+```rust
+pub struct InMemDataset<I, L: Label> {
+    items: Vec<Labeled<I, L>>,
+}
+```
+
+Records are stored as labeled values.
+
+Example:
+
+```text
+CSV / JSON
+    ↓
+    I
+    ↓
+Labeled<I, L>
+    ↓
+Stored
+```
+
+---
+
+## Immediate Labeling
+
+The project requirement is:
+
+```text
+Data should be labeled immediately
+when it enters Burn.
+```
+
+Therefore records loaded from:
+
+```rust
+from_csv(...)
+from_json_rows(...)
+```
+
+are labeled before storage.
+
+This prevents unlabeled user data from existing inside Burn memory.
+
+---
+
+## Iterator Propagation
+
+DatasetIterator was updated to preserve labels.
+
+Original:
+
+```rust
+Iterator<Item = I>
+```
+
+Modified:
+
+```rust
+Iterator<Item = Labeled<I, L>>
+```
+
+The iterator performs no IFC checks.
+
+Its sole responsibility is preserving labels established by the underlying dataset.
+
+Conceptually:
+
+```text
+Dataset<I, Secret>
+    ↓
+get()
+    ↓
+Labeled<I, Secret>
+    ↓
+Iterator
+    ↓
+Labeled<I, Secret>
+```
+
+---
+
+# SqliteDataset
+
+SqliteDataset differs from InMemDataset because it does not store dataset records in memory.
+
+Instead it stores:
+
+```text
+Database metadata
+Connection pool
+Table information
+SQL queries
+```
+
+The actual records remain inside SQLite.
+
+---
+
+## Original Design
+
+```text
+SQLite Database
+    ↓
+query_row(...)
+    ↓
+I
+    ↓
+return
+```
+
+The dataset returned:
+
+```rust
+Option<I>
+```
+
+---
+
+## IFC Design
+
+The project requirement is:
+
+```text
+Data should be labeled immediately
+when it enters Burn.
+```
+
+For SqliteDataset, data enters Burn when a SQLite row is converted into a Rust value.
+
+Therefore the IFC boundary is:
+
+```rust
+fn get(...)
+```
+
+rather than the SqliteDataset struct itself.
+
+---
+
+## Data Flow
+
+```text
+SQLite Database
+    ↓
+Deserialize Row
+    ↓
+    I
+    ↓
+Labeled<I, L>
+    ↓
+Return
+```
+
+Conceptually:
+
+```rust
+let item: I = deserialize(...);
+
+Labeled::<I, L>::new(item)
+```
+
+---
+
+## Why SqliteDataset Differs From InMemDataset
+
+InMemDataset stores records directly:
+
+```rust
+Vec<Labeled<I, L>>
+```
+
+because the data already exists inside Burn memory.
+
+SqliteDataset does not store records.
+
+Instead, it retrieves records from an external database.
+
+Therefore records are labeled at retrieval time rather than storage time.
+
+Both implementations follow the same rule:
+
+```text
+Label data when it enters Burn.
+```
 
 ---
 
@@ -257,20 +423,30 @@ FlowsTo
 Join
 ```
 
-The current implementation uses phantom types to associate security labels with values:
-
-```rust
-pub struct Labeled<T, L: Label> {
-    value: T,
-    _marker: PhantomData<L>,
-}
-```
-
 ---
 
-# Outstanding Questions
+## Label Trait
 
-## Send + Sync
+Original:
+
+```rust
+pub trait Label:
+    Clone + Copy + Default + 'static
+{}
+```
+
+Modified:
+
+```rust
+pub trait Label:
+    Clone
+    + Copy
+    + Default
+    + Send
+    + Sync
+    + 'static
+{}
+```
 
 Burn datasets require:
 
@@ -280,55 +456,40 @@ Send + Sync
 
 because datasets may be shared across worker threads.
 
-The IFC labels currently do not explicitly implement these bounds.
-
-Need to determine whether:
+Adding these bounds to the Label trait propagates thread-safety requirements throughout the IFC system and avoids repeatedly adding:
 
 ```rust
-pub trait Label
+L: Label + Send + Sync
 ```
 
-should be updated to include:
+to dataset implementations.
+
+---
+
+## Labeled Values
+
+Security labels are implemented using phantom types:
 
 ```rust
-Send + Sync
+pub struct Labeled<T, L: Label> {
+    value: T,
+    _marker: PhantomData<L>,
+}
 ```
 
-or whether those bounds should be introduced elsewhere.
+Labels exist entirely at compile time.
 
----
+No runtime label information is stored.
 
-## DataLoader
+Example:
 
-Not yet analyzed.
-
-Need to determine how dataset labels propagate through:
-
-```text
-Dataset
-    ↓
-DataLoader
+```rust
+Labeled<MnistItem, Secret>
 ```
 
----
+changes the Rust type but does not change the runtime representation.
 
-## Batcher
-
-Not yet analyzed.
-
-Need to determine how labeled dataset items become labeled tensors.
-
----
-
-## Tensor
-
-Not yet analyzed.
-
-Need to determine whether tensor labels should be stored:
-
-- on tensors themselves
-- on tensor data
-- through wrapper types
+This design follows the Filament approach and introduces effectively zero runtime overhead.
 
 ---
 
@@ -340,26 +501,38 @@ Successfully prototyped:
 Dataset<I, L>
 ```
 
-and:
-
 ```rust
 InMemDataset<I, L>
 ```
 
-in a separate test crate.
+```rust
+DatasetIterator<I, L>
+```
 
-Current propagation path under investigation:
+Current propagation path:
 
 ```text
 Dataset
     ↓
-DatasetIterator
+Dataset Transforms
+    ↓
+Iterator
 ```
 
-Next step is ensuring iterator semantics correctly preserve:
+Current work focuses on propagating labels through:
 
-```rust
-Labeled<I, L>
+```text
+SqliteDataset
+    ↓
+DataLoader
+    ↓
+Batcher
+    ↓
+Tensor
 ```
 
-through iteration.
+while maintaining the invariant:
+
+```text
+Data is labeled immediately when it enters Burn.
+```
