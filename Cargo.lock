@@ -898,6 +898,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "burn-dataset-test"
+version = "0.22.0-pre.1"
+dependencies = [
+ "burn-std",
+ "csv",
+ "derive-new",
+ "dirs",
+ "encoding_rs",
+ "fake",
+ "flate2",
+ "gix-tempfile",
+ "globwalk",
+ "hound",
+ "image",
+ "macros",
+ "planus",
+ "polars",
+ "r2d2",
+ "r2d2_sqlite",
+ "rand 0.10.1",
+ "rayon",
+ "rmp-serde",
+ "rstest",
+ "rusqlite",
+ "sanitize-filename",
+ "serde",
+ "serde_json",
+ "serde_rusqlite",
+ "strum 0.28.0",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.18",
+ "typing_rules",
+ "zip 8.6.0",
+]
+
+[[package]]
 name = "burn-derive"
 version = "0.22.0-pre.1"
 dependencies = [
@@ -5252,6 +5289,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
+name = "macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9304,6 +9350,10 @@ name = "typenum"
 version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
+
+[[package]]
+name = "typing_rules"
+version = "0.1.0"
 
 [[package]]
 name = "ucd-trie"

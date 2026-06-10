@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 // LABEL TRAITS
 // The core security labels used to tag data and execution contexts.
-pub trait Label: Clone + Copy + Default + 'static {}
+pub trait Label: Clone + Copy + Default + Send + Sync + 'static {}
 
 #[derive(Clone, Copy, Default)]
 pub struct Public;

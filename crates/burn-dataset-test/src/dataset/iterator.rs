@@ -4,6 +4,10 @@ use std::iter::Iterator;
 use typing_rules::*; // import filament ifc
 
 /// Dataset iterator.
+/// IFC:
+/// Labels are preserved during iteration.
+/// A Dataset<I, L> produces an Iterator<Item = Labeled<I, L>>.
+/// Iteration must never strip or modify labels.
 pub struct DatasetIterator<'a, I, L: Label> {
     current: usize,
     dataset: &'a dyn Dataset<I, L>,
