@@ -11,46 +11,44 @@ use crate::Dataset;
 use typing_rules::*; // import filament ifc
 
 /// Dataset where all items are stored in ram.
-pub struct InMemDataset<I, L> {
-    items: Vec<I>,
-    _label: PhantomData<L>,
+pub struct InMemDataset<I, L: Label> {
+    items: Vec<Labeled<I, L>>,
 }
 
-impl<I, L> InMemDataset<I, L> {
+impl<I, L: Label> InMemDataset<I, L> {
     /// Creates a new in memory dataset from the given items.
-    pub fn new(items: Vec<I>) -> Self {
+    pub fn new(items: Vec<Labeled<I, L>>) -> Self {
         InMemDataset {
             items,
-            _label: PhantomData,
         }
     }
 }
 
-impl<I, L> Dataset<I, L> for InMemDataset<I, L>
+impl<I, L: Label> Dataset<I, L> for InMemDataset<I, L>
 where
     I: Clone + Send + Sync,
     L: Label,
 {
     fn get(&self, index: usize) -> Option<Labeled<I, L>> {
-        self.items.get(index).cloned().map(Labeled::new)
+        self.items.get(index).cloned()
     }
     fn len(&self) -> usize {
         self.items.len()
     }
 }
 
-impl<I, L> InMemDataset<I, L>
+impl<I, L: Label> InMemDataset<I, L>
 where
     I: Clone + DeserializeOwned,
     L: Label,
 {
     /// Create from a dataset. All items are loaded in memory.
-    pub fn from_dataset<L: Label>(dataset: &impl Dataset<I, L>) -> Self {
-        let items: Vec<I> = dataset.iter().collect();
+    pub fn from_dataset(dataset: &impl Dataset<I, L>) -> Self {
+        let items: Vec<Labeled<I, L>> = dataset.iter().collect();
         Self::new(items)
     }
 
-    /// Create from a json rows file (one json per line).
+    /// Create from a json rows filei (one json per line).
     ///
     /// [Supported field types](https://docs.rs/serde_json/latest/serde_json/value/enum.Value.html)
     pub fn from_json_rows<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
@@ -60,7 +58,7 @@ where
 
         for line in reader.lines() {
             let item = serde_json::from_str(line.unwrap().as_str()).unwrap();
-            items.push(item);
+            items.push(Labeled::<I, L>::new(item));
         }
 
         let dataset = Self::new(items);
@@ -87,7 +85,7 @@ where
 
         for result in rdr.deserialize() {
             let item: I = result?;
-            items.push(item);
+            items.push(Labeled::<I, L>::new(item));
         }
 
         let dataset = Self::new(items);

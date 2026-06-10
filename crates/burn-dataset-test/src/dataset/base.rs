@@ -7,6 +7,7 @@ use typing_rules::*; // import filament ifc
 /// The dataset trait defines a basic collection of items with a predefined size.
 pub trait Dataset<I, L: Label>: Send + Sync {
     /// Gets the item at the given index.
+    /// Data extracted should inherit label.
     fn get(&self, index: usize) -> Option<Labeled<I, L>>;
 
     /// Gets the number of items in the dataset.
@@ -18,7 +19,8 @@ pub trait Dataset<I, L: Label>: Send + Sync {
     }
 
     /// Returns an iterator over the dataset.
-    fn iter(&self) -> DatasetIterator<'_, I>
+    /// Iterator should be labeled
+    fn iter(&self) -> DatasetIterator<'_, I, L>
     where
         Self: Sized,
     {
@@ -26,6 +28,8 @@ pub trait Dataset<I, L: Label>: Send + Sync {
     }
 }
 
+
+/// Arc and Box wrappers of dataset. Label carries from dataset.
 impl<D, I, L: Label> Dataset<I, L> for Arc<D>
 where
     D: Dataset<I, L>,
