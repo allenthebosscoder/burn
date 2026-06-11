@@ -1,4 +1,5 @@
 use crate::Dataset;
+use typing_rules::*; // import filament ifc
 
 /// Compose multiple datasets together to create a bigger one.
 #[derive(new)]
@@ -6,12 +7,12 @@ pub struct ComposedDataset<D> {
     datasets: Vec<D>,
 }
 
-impl<D, I> Dataset<I> for ComposedDataset<D>
+impl<D, I, L: Label> Dataset<I, L> for ComposedDataset<D>
 where
-    D: Dataset<I>,
+    D: Dataset<I, L>,
     I: Clone,
 {
-    fn get(&self, index: usize) -> Option<I> {
+    fn get(&self, index: usize) -> Option<Labeled<I, L>> {
         let mut current_index = 0;
         for dataset in self.datasets.iter() {
             if index < dataset.len() + current_index {

@@ -3,6 +3,7 @@ use crate::transform::{RngSource, SizeConfig};
 use rand::prelude::SliceRandom;
 use rand::{RngExt, distr::Uniform, rngs::StdRng, seq::IteratorRandom};
 use std::{marker::PhantomData, ops::DerefMut, sync::Mutex};
+use typing_rules::*; // import filament ifc
 
 /// Options to configure a [SamplerDataset].
 #[derive(Debug, PartialEq)]
@@ -124,20 +125,20 @@ impl SamplerDatasetOptions {
 ///   [shuffled dataset](crate::transform::ShuffledDataset), but with more flexibility since you can
 ///   set the dataset to an arbitrary size. Once every item has been used, a new cycle is
 ///   created with a new random suffle.
-pub struct SamplerDataset<D, I> {
+pub struct SamplerDataset<D, I, L: Label> {
     dataset: D,
     size: usize,
     state: Mutex<SamplerState>,
-    input: PhantomData<I>,
+    input: PhantomData<Labeled<I, L>>,
 }
 enum SamplerState {
     WithReplacement(StdRng),
     WithoutReplacement(StdRng, Vec<usize>),
 }
 
-impl<D, I> SamplerDataset<D, I>
+impl<D, I, L: Label> SamplerDataset<D, I, L>
 where
-    D: Dataset<I>,
+    D: Dataset<I, L>,
     I: Send + Sync,
 {
     /// Creates a new sampler dataset with replacement.
@@ -286,12 +287,12 @@ where
     }
 }
 
-impl<D, I> Dataset<I> for SamplerDataset<D, I>
+impl<D, I, L: Label> Dataset<I, L> for SamplerDataset<D, I, L>
 where
-    D: Dataset<I>,
+    D: Dataset<I, L>,
     I: Send + Sync,
 {
-    fn get(&self, index: usize) -> Option<I> {
+    fn get(&self, index: usize) -> Option<Labeled<I, L>> {
         if index >= self.size {
             return None;
         }

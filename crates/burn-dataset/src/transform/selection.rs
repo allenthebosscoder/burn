@@ -40,9 +40,9 @@ pub fn shuffled_indices(size: usize, rng: &mut StdRng) -> Vec<usize> {
 ///
 /// Indices may appear multiple times, but they must be within the bounds of the original dataset.
 #[derive(Clone)]
-pub struct SelectionDataset<D, I, L>
+pub struct SelectionDataset<D, I, L: Label>
 where
-    D: Dataset<I, L: Label>,
+    D: Dataset<I, L>,
     I: Clone + Send + Sync,
 {
     /// The wrapped dataset from which to select indices.
@@ -51,12 +51,12 @@ where
     /// The indices to select from the wrapped dataset.
     pub indices: Vec<usize>,
 
-    input: PhantomData<I>,
+    input: PhantomData<Labeled<I, L>>,
 }
 
-impl<D, I> SelectionDataset<D, I>
+impl<D, I, L: Label> SelectionDataset<D, I, L>
 where
-    D: Dataset<I>,
+    D: Dataset<I, L>,
     I: Clone + Send + Sync,
 {
     /// Creates a new selection dataset with the given dataset and indices.
@@ -221,12 +221,12 @@ where
     }
 }
 
-impl<D, I> Dataset<I> for SelectionDataset<D, I>
+impl<D, I, L: Label> Dataset<I, L> for SelectionDataset<D, I, L>
 where
-    D: Dataset<I>,
+    D: Dataset<I, L>,
     I: Clone + Send + Sync,
 {
-    fn get(&self, index: usize) -> Option<I> {
+    fn get(&self, index: usize) -> Option<Labeled<I, L>> {
         let index = self.indices.get(index)?;
         self.wrapped.get(*index)
     }
