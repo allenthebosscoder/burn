@@ -70,6 +70,8 @@ strum = { workspace = true }
 tar = { workspace = true, optional = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+macros = { path = "../../fg_ifc_library/macros" }
+typing_rules = { path = "../../fg_ifc_library/typing_rules" }
 
 
 [dev-dependencies]

@@ -21,6 +21,8 @@ use sanitize_filename::sanitize;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_rusqlite::{columns_from_statement, from_row_with_columns};
 
+use typing_rules::*; // import filament ifc
+
 /// Result type for the sqlite dataset.
 pub type Result<T> = core::result::Result<T, SqliteDatasetError>;
 
@@ -192,12 +194,13 @@ impl<I> SqliteDataset<I> {
     }
 }
 
-impl<I> Dataset<I> for SqliteDataset<I>
+impl<I, L> Dataset<I, L> for SqliteDataset<I>
 where
     I: Clone + Send + Sync + DeserializeOwned,
+    L: Label
 {
     /// Get an item from the dataset.
-    fn get(&self, index: usize) -> Option<I> {
+    fn get(&self, index: usize) -> Option<Labeled<I, L>> {
         // Row ids start with 1 (one) and index starts with 0 (zero)
         let row_id = index + 1;
 
@@ -217,6 +220,7 @@ where
                 })
                 .optional() //Converts Error (not found) to None
                 .unwrap()
+                .map(|item|Labeled::<I, L>::new(item))      // Add label after deserializing from SQL
         } else {
             // Fetch a row with multiple columns and deserialize it serde_rusqlite
             statement
@@ -226,6 +230,7 @@ where
                 })
                 .optional() //Converts Error (not found) to None
                 .unwrap()
+                .map(|item|Labeled::<I, L>::new(item))      // Add label after deserializing from SQL
         }
     }
 
