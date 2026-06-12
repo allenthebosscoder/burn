@@ -7,17 +7,18 @@ use burn_tensor::Device;
 use rand::SeedableRng;
 use std::ops::DerefMut;
 use std::sync::Arc;
+use typing_rules::*; // import filament ifc
 
 /// A data loader that can be used to iterate over a dataset in batches.
-pub struct BatchDataLoader<I, O> {
-    strategy: Box<dyn BatchStrategy<I>>,
-    dataset: Arc<dyn Dataset<I>>,
-    batcher: Arc<dyn Batcher<I, O>>,
+pub struct BatchDataLoader<I, O, L: Label> {
+    strategy: Box<dyn BatchStrategy<I, L>>,
+    dataset: Arc<dyn Dataset<I, L>>,
+    batcher: Arc<dyn Batcher<I, O, L>>,
     device: Device,
     rng: Option<Arc<spin::Mutex<rand::rngs::StdRng>>>,
 }
 
-impl<I, O> Clone for BatchDataLoader<I, O> {
+impl<I, O, L: Label> Clone for BatchDataLoader<I, O, L> {
     fn clone(&self) -> Self {
         Self {
             strategy: self.strategy.clone_dyn(),
@@ -29,7 +30,7 @@ impl<I, O> Clone for BatchDataLoader<I, O> {
     }
 }
 
-impl<I, O> BatchDataLoader<I, O> {
+impl<I, O, L: Label> BatchDataLoader<I, O, L> {
     /// Creates a new batch data loader.
     ///
     /// # Arguments
@@ -45,9 +46,9 @@ impl<I, O> BatchDataLoader<I, O> {
     ///
     /// The batch data loader.
     pub fn new(
-        strategy: Box<dyn BatchStrategy<I>>,
-        dataset: Arc<dyn Dataset<I>>,
-        batcher: Arc<dyn Batcher<I, O>>,
+        strategy: Box<dyn BatchStrategy<I, L>>,
+        dataset: Arc<dyn Dataset<I, L>>,
+        batcher: Arc<dyn Batcher<I, O, L>>,
         device: Device,
         rng: Option<rand::rngs::StdRng>,
     ) -> Self {
@@ -62,20 +63,21 @@ impl<I, O> BatchDataLoader<I, O> {
 }
 
 /// A data loader iterator that can be used to iterate over a data loader.
-struct BatchDataloaderIterator<I, O> {
+struct BatchDataloaderIterator<I, O, L: Label> {
     current_index: usize,
-    strategy: Box<dyn BatchStrategy<I>>,
-    dataset: Arc<dyn Dataset<I>>,
-    batcher: Arc<dyn Batcher<I, O>>,
+    strategy: Box<dyn BatchStrategy<I, L>>,
+    dataset: Arc<dyn Dataset<I, L>>,
+    batcher: Arc<dyn Batcher<I, O, L>>,
     device: Device,
 }
 
-impl<I, O> DataLoader<O> for BatchDataLoader<I, O>
+impl<I, O, L> DataLoader<O, L> for BatchDataLoader<I, O, L>
 where
     I: Send + Sync + Clone + 'static,
     O: Send + 'static,
+    L: Label,
 {
-    fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<O> + 'a> {
+    fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<O, L> + 'a> {
         // When starting a new iteration, we first check if the dataloader was created with an rng,
         // implying that we should shuffle the dataset beforehand, while advancing the current
         // rng to ensure that each new iteration shuffles the dataset differently.
@@ -98,7 +100,7 @@ where
         self.dataset.len()
     }
 
-    fn to_device(&self, device: &Device) -> Arc<dyn DataLoader<O>> {
+    fn to_device(&self, device: &Device) -> Arc<dyn DataLoader<O, L>> {
         let rng = self.rng.as_ref().map(|rng| {
             let mut rng = rng.lock();
             rng.fork()
@@ -112,7 +114,7 @@ where
         ))
     }
 
-    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<O>> {
+    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<O, L>> {
         let rng = self.rng.as_ref().map(|rng| {
             let mut rng = rng.lock();
             rng.fork()
@@ -128,7 +130,7 @@ where
     }
 }
 
-impl<I, O> BatchDataloaderIterator<I, O> {
+impl<I, O, L: Label> BatchDataloaderIterator<I, O, L> {
     /// Creates a new batch data loader iterator.
     ///
     /// # Arguments
@@ -142,9 +144,9 @@ impl<I, O> BatchDataloaderIterator<I, O> {
     ///
     /// The batch data loader iterator.
     pub fn new(
-        strategy: Box<dyn BatchStrategy<I>>,
-        dataset: Arc<dyn Dataset<I>>,
-        batcher: Arc<dyn Batcher<I, O>>,
+        strategy: Box<dyn BatchStrategy<I, L>>,
+        dataset: Arc<dyn Dataset<I, L>>,
+        batcher: Arc<dyn Batcher<I, O, L>>,
         device: Device,
     ) -> Self {
         BatchDataloaderIterator {
@@ -157,10 +159,10 @@ impl<I, O> BatchDataloaderIterator<I, O> {
     }
 }
 
-impl<I, O> Iterator for BatchDataloaderIterator<I, O> {
-    type Item = O;
+impl<I, O, L: Label> Iterator for BatchDataloaderIterator<I, O, L> {
+    type Item = Labeled<O, L>;
 
-    fn next(&mut self) -> Option<O> {
+    fn next(&mut self) -> Option<Labeled<O, L>> {
         while let Some(item) = self.dataset.get(self.current_index) {
             self.current_index += 1;
             self.strategy.add(item);
@@ -178,7 +180,7 @@ impl<I, O> Iterator for BatchDataloaderIterator<I, O> {
     }
 }
 
-impl<I, O> DataLoaderIterator<O> for BatchDataloaderIterator<I, O> {
+impl<I, O, L: Label> DataLoaderIterator<O, L> for BatchDataloaderIterator<I, O, L> {
     fn progress(&self) -> Progress {
         let unit: Option<String> = Some("items".to_string());
 

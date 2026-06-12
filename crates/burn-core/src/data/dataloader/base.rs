@@ -3,6 +3,7 @@ use burn_tensor::Device;
 pub use crate::data::dataset::{Dataset, DatasetIterator};
 use core::iter::Iterator;
 use std::sync::Arc;
+use typing_rules::*; // import filament ifc
 
 /// A progress struct that can be used to track the progress of a data loader.
 #[derive(new, Clone, Debug)]
@@ -18,22 +19,22 @@ pub struct Progress {
 }
 
 /// A data loader iterator that can be used to iterate over a data loader.
-pub trait DataLoaderIterator<O>: Iterator<Item = O> {
+pub trait DataLoaderIterator<O, L: Label>: Iterator<Item = Labeled<O, L>> {
     /// Returns the progress of the data loader.
     fn progress(&self) -> Progress;
 }
 
 /// A data loader that can be used to iterate over a dataset.
-pub trait DataLoader<O>: Send + Sync {
+pub trait DataLoader<O, L: Label>: Send + Sync {
     /// Returns a boxed [iterator](DataLoaderIterator) to iterate over the data loader.
-    fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<O> + 'a>;
+    fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<O, L> + 'a>;
 
     /// The number of items (not the number of batches nor the number of iterations),
     /// corresponding to the items_total of the progress returned by the iterator.
     fn num_items(&self) -> usize;
 
     /// Move the data loader to the given device, ensuring the batches are assigned to the correct device.
-    fn to_device(&self, device: &Device) -> Arc<dyn DataLoader<O>>;
+    fn to_device(&self, device: &Device) -> Arc<dyn DataLoader<O, L>>;
 
     /// Returns a new data loader containing a subset of the data.
     ///
@@ -48,5 +49,5 @@ pub trait DataLoader<O>: Send + Sync {
     /// # Returns
     ///
     /// A boxed [`DataLoader`] instance containing only the specified range.
-    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<O>>;
+    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<O, L>>;
 }

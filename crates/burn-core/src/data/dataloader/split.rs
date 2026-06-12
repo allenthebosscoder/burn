@@ -4,11 +4,13 @@ use burn_tensor::Device;
 
 use super::DataLoader;
 
+use typing_rules::*; // import filament ifc
+
 /// Splits a dataloader into multiple partial dataloaders (one per device).
-pub fn split_dataloader<O>(
-    dataloader: Arc<dyn DataLoader<O>>,
+pub fn split_dataloader<O, L: Label>(
+    dataloader: Arc<dyn DataLoader<O, L>>,
     devices: &[Device],
-) -> Vec<Arc<dyn DataLoader<O>>> {
+) -> Vec<Arc<dyn DataLoader<O, L>>> {
     let num_splits = devices.len();
     if num_splits > 1 {
         let num_items = dataloader.num_items();

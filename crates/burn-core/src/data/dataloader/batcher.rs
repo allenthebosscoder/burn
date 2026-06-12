@@ -1,7 +1,8 @@
 use burn_tensor::Device;
+use typing_rules::*; // import filament ifc
 
 /// A trait for batching items of type `I` into items of type `O`.
-pub trait Batcher<I, O>: Send + Sync {
+pub trait Batcher<I, O, L: Label>: Send + Sync {
     /// Batches the given items on the specified device.
     ///
     /// # Arguments
@@ -12,7 +13,7 @@ pub trait Batcher<I, O>: Send + Sync {
     /// # Returns
     ///
     /// The batched items.
-    fn batch(&self, items: Vec<I>, device: &Device) -> O;
+    fn batch(&self, items: Vec<Labeled<I, L>>, device: &Device) -> Labeled<O, L>;
 }
 
 /// Test batcher
@@ -21,8 +22,8 @@ pub trait Batcher<I, O>: Send + Sync {
 pub struct TestBatcher;
 
 #[cfg(test)]
-impl<I> Batcher<I, Vec<I>> for TestBatcher {
-    fn batch(&self, items: Vec<I>, _device: &Device) -> Vec<I> {
+impl<I, L: Label> Batcher<I, Vec<I>, L> for TestBatcher {
+    fn batch(&self, items: Vec<Labeled<I, L>>, _device: &Device) -> Vec<Labeled<I, L>> {
         items
     }
 }

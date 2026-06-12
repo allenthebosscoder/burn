@@ -6,20 +6,22 @@ use burn_dataset::Dataset;
 use burn_tensor::Device;
 use rand::{SeedableRng, rngs::StdRng};
 use std::sync::Arc;
+use typing_rules::*; // import filament ifc
 
 /// A builder for data loaders.
-pub struct DataLoaderBuilder<I, O> {
-    strategy: Option<Box<dyn BatchStrategy<I>>>,
-    batcher: Arc<dyn Batcher<I, O>>,
+pub struct DataLoaderBuilder<I, O, L: Label> {
+    strategy: Option<Box<dyn BatchStrategy<I, L>>>,
+    batcher: Arc<dyn Batcher<I, O, L>>,
     num_threads: Option<usize>,
     shuffle: Option<u64>,
     device: Option<Device>,
 }
 
-impl<I, O> DataLoaderBuilder<I, O>
+impl<I, O, L> DataLoaderBuilder<I, O, L>
 where
     I: Send + Sync + Clone + std::fmt::Debug + 'static,
     O: Send + Clone + std::fmt::Debug + 'static,
+    L: Label,
 {
     /// Creates a new data loader builder.
     ///
@@ -32,7 +34,7 @@ where
     /// The data loader builder.
     pub fn new<Bt>(batcher: Bt) -> Self
     where
-        Bt: Batcher<I, O> + 'static,
+        Bt: Batcher<I, O, L> + 'static,
     {
         Self {
             batcher: Arc::new(batcher),
@@ -118,9 +120,9 @@ where
     /// # Returns
     ///
     /// The data loader.
-    pub fn build<D>(self, dataset: D) -> Arc<dyn DataLoader<O>>
+    pub fn build<D>(self, dataset: D) -> Arc<dyn DataLoader<O, L>>
     where
-        D: Dataset<I> + 'static,
+        D: Dataset<I, L> + 'static,
     {
         let dataset = Arc::new(dataset);
 

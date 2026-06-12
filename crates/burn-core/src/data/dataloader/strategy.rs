@@ -1,11 +1,13 @@
+use typing_rules::*; // import filament ifc
+
 /// A strategy to batch items.
-pub trait BatchStrategy<I>: Send + Sync {
+pub trait BatchStrategy<I, L: Label>: Send + Sync {
     /// Adds an item to the strategy.
     ///
     /// # Arguments
     ///
     /// * `item` - The item to add.
-    fn add(&mut self, item: I);
+    fn add(&mut self, item: Labeled<I, L>);
 
     /// Batches the items.
     ///
@@ -16,14 +18,14 @@ pub trait BatchStrategy<I>: Send + Sync {
     /// # Returns
     ///
     /// The batched items.
-    fn batch(&mut self, force: bool) -> Option<Vec<I>>;
+    fn batch(&mut self, force: bool) -> Option<Vec<Labeled<I, L>>>;
 
     /// Creates a new strategy of the same type.
     ///
     /// # Returns
     ///
     /// The new strategy.
-    fn clone_dyn(&self) -> Box<dyn BatchStrategy<I>>;
+    fn clone_dyn(&self) -> Box<dyn BatchStrategy<I, L>>;
 
     /// Returns the expected batch size for this strategy.
     ///
@@ -34,12 +36,12 @@ pub trait BatchStrategy<I>: Send + Sync {
 }
 
 /// A strategy to batch items with a fixed batch size.
-pub struct FixBatchStrategy<I> {
-    items: Vec<I>,
+pub struct FixBatchStrategy<I, L: Label> {
+    items: Vec<Labeled<I, L>>,
     batch_size: usize,
 }
 
-impl<I> FixBatchStrategy<I> {
+impl<I, L: Label> FixBatchStrategy<I, L> {
     /// Creates a new strategy to batch items with a fixed batch size.
     ///
     /// # Arguments
@@ -57,12 +59,12 @@ impl<I> FixBatchStrategy<I> {
     }
 }
 
-impl<I: Send + Sync + 'static> BatchStrategy<I> for FixBatchStrategy<I> {
-    fn add(&mut self, item: I) {
+impl<I: Send + Sync + 'static, L: Label> BatchStrategy<I, L> for FixBatchStrategy<I, L> {
+    fn add(&mut self, item: Labeled<I, L>) {
         self.items.push(item);
     }
 
-    fn batch(&mut self, force: bool) -> Option<Vec<I>> {
+    fn batch(&mut self, force: bool) -> Option<Vec<Labeled<I, L>>> {
         if self.items.len() < self.batch_size && !force {
             return None;
         }
@@ -77,7 +79,7 @@ impl<I: Send + Sync + 'static> BatchStrategy<I> for FixBatchStrategy<I> {
         Some(items)
     }
 
-    fn clone_dyn(&self) -> Box<dyn BatchStrategy<I>> {
+    fn clone_dyn(&self) -> Box<dyn BatchStrategy<I, L>> {
         Box::new(Self::new(self.batch_size))
     }
 

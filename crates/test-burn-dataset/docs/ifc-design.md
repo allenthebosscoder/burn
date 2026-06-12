@@ -138,29 +138,586 @@ inherits the dataset label.
 
 # Dataset Transforms
 
-Several Burn abstractions operate on top of an existing dataset:
+Several Burn dataset abstractions operate on top of an existing dataset:
 
 ```text
 DatasetIterator
 SelectionDataset
 PartialDataset
 ShuffleDataset
-WindowDataset
 SamplerDataset
+ComposedDataset
 MapperDataset
+WindowsDataset
 ```
 
-These consume one dataset and produce another.
+These transforms consume an existing dataset and produce a new dataset.
 
 Example:
 
 ```text
 Dataset<I, Secret>
     ↓
-ShuffleDataset
+Transform
+    ↓
+Dataset<..., Secret>
+```
+
+---
+
+## IFC Design Principle
+
+Dataset transforms must preserve labels.
+
+Transforms are not allowed to:
+
+- remove labels
+- downgrade labels
+- declassify data
+
+Transforms may:
+
+- change ordering
+- change indexing
+- change grouping
+- change item representation
+
+while preserving security labels.
+
+---
+
+# SelectionDataset
+
+SelectionDataset allows selecting arbitrary indices from an existing dataset.
+
+Example:
+
+```text
+Dataset<I, Secret>
+    ↓
+Select [4, 7, 10]
     ↓
 Dataset<I, Secret>
 ```
+
+### IFC Changes
+
+Original:
+
+```rust
+SelectionDataset<D, I>
+```
+
+Modified:
+
+```rust
+SelectionDataset<D, I, L>
+```
+
+with:
+
+```rust
+D: Dataset<I, L>
+```
+
+and:
+
+```rust
+impl<D, I, L> Dataset<I, L>
+```
+
+The selected dataset preserves the original label.
+
+Selection only changes which records are visible.
+
+It does not change information sensitivity.
+
+---
+
+# PartialDataset
+
+PartialDataset exposes only a subset of an existing dataset.
+
+Example:
+
+```text
+Dataset<I, Secret>
+    ↓
+Take first 100 samples
+    ↓
+Dataset<I, Secret>
+```
+
+### IFC Changes
+
+Original:
+
+```rust
+PartialDataset<D, I>
+```
+
+Modified:
+
+```rust
+PartialDataset<D, I, L>
+```
+
+with:
+
+```rust
+D: Dataset<I, L>
+```
+
+and:
+
+```rust
+impl<D, I, L> Dataset<I, L>
+```
+
+The resulting dataset preserves the label of the original dataset.
+
+Only the visible range changes.
+
+---
+
+# ShuffledDataset
+
+ShuffledDataset randomly reorders dataset items.
+
+Example:
+
+```text
+Dataset<I, Secret>
+    ↓
+Shuffle
+    ↓
+Dataset<I, Secret>
+```
+
+### IFC Changes
+
+Original:
+
+```rust
+ShuffledDataset<D, I>
+```
+
+Modified:
+
+```rust
+ShuffledDataset<D, I, L>
+```
+
+with:
+
+```rust
+D: Dataset<I, L>
+```
+
+and:
+
+```rust
+impl<D, I, L> Dataset<I, L>
+```
+
+Shuffling changes only item order.
+
+No labels are modified.
+
+The implementation simply forwards calls to an underlying:
+
+```rust
+SelectionDataset<D, I, L>
+```
+
+which already preserves labels.
+
+---
+
+# SamplerDataset
+
+SamplerDataset randomly samples dataset elements according to a probability distribution.
+
+Example:
+
+```text
+Dataset<I, Secret>
+    ↓
+Sampling
+    ↓
+Dataset<I, Secret>
+```
+
+### IFC Changes
+
+Original:
+
+```rust
+SamplerDataset<D, I>
+```
+
+Modified:
+
+```rust
+SamplerDataset<D, I, L>
+```
+
+with:
+
+```rust
+D: Dataset<I, L>
+```
+
+and:
+
+```rust
+impl<D, I, L> Dataset<I, L>
+```
+
+Sampling changes only which index is selected.
+
+Labels propagate unchanged from the underlying dataset.
+
+---
+
+# ComposedDataset
+
+ComposedDataset concatenates multiple datasets together.
+
+Example:
+
+```text
+Dataset<I, Secret>
+Dataset<I, Secret>
+          ↓
+      Compose
+          ↓
+Dataset<I, Secret>
+```
+
+### IFC Changes
+
+Original:
+
+```rust
+ComposedDataset<D>
+```
+
+implemented:
+
+```rust
+Dataset<I>
+```
+
+Modified:
+
+```rust
+impl<D, I, L> Dataset<I, L>
+```
+
+with:
+
+```rust
+D: Dataset<I, L>
+```
+
+### Design Decision
+
+All component datasets must share the same label:
+
+```rust
+D: Dataset<I, L>
+```
+
+Mixed-label composition is currently unsupported.
+
+Example:
+
+```text
+Secret + Secret -> Secret
+```
+
+Supported.
+
+```text
+Public + Secret
+```
+
+Not currently supported.
+
+The composed dataset simply forwards labeled values from the underlying datasets.
+
+---
+
+# MapperDataset
+
+MapperDataset transforms dataset items from one type into another.
+
+Example:
+
+```text
+Dataset<I, Secret>
+        ↓
+      Mapper
+        ↓
+Dataset<O, Secret>
+```
+
+This is the first transform that changes the dataset item type.
+
+### IFC Changes
+
+Original:
+
+```rust
+Mapper<I, O>
+```
+
+Modified:
+
+```rust
+Mapper<I, O, L>
+```
+
+with:
+
+```rust
+fn map(
+    &self,
+    item: &Labeled<I, L>
+) -> Labeled<O, L>;
+```
+
+### Design Decision
+
+The mapper receives labeled input:
+
+```rust
+Labeled<I, L>
+```
+
+and produces labeled output:
+
+```rust
+Labeled<O, L>
+```
+
+Labels are preserved through transformations.
+
+Example:
+
+```text
+Labeled<String, Secret>
+            ↓
+       truncate
+            ↓
+Labeled<String, Secret>
+```
+
+The mapper may change the inner value type:
+
+```text
+I
+↓
+O
+```
+
+but it must not change the security label.
+
+### Label-Preserving Transformations
+
+The IFC library helper:
+
+```rust
+__map_ref(...)
+```
+
+is used to transform inner values while preserving labels.
+
+Conceptually:
+
+```text
+Labeled<I, Secret>
+        ↓
+   __map_ref
+        ↓
+Labeled<O, Secret>
+```
+
+No declassification occurs.
+
+---
+
+# WindowsDataset
+
+WindowsDataset groups adjacent dataset elements into overlapping windows.
+
+Example:
+
+Original dataset:
+
+```text
+1
+2
+3
+4
+5
+```
+
+Window size:
+
+```text
+3
+```
+
+Produces:
+
+```text
+[1,2,3]
+[2,3,4]
+[3,4,5]
+```
+
+### IFC Changes
+
+Original:
+
+```rust
+Dataset<I>
+```
+
+Window output:
+
+```rust
+Dataset<Vec<I>>
+```
+
+Modified:
+
+```rust
+Dataset<I, L>
+```
+
+Window output:
+
+```rust
+Dataset<Vec<I>, L>
+```
+
+### Design Decision
+
+Each individual dataset element is already labeled:
+
+```rust
+Labeled<I, L>
+```
+
+A window combines multiple labeled elements into a new dataset item.
+
+Example:
+
+```text
+Labeled<I, Secret>
+Labeled<I, Secret>
+Labeled<I, Secret>
+            ↓
+       Window
+            ↓
+Labeled<Vec<I>, Secret>
+```
+
+The window itself becomes the labeled value.
+
+The output is:
+
+```rust
+Labeled<Vec<I>, L>
+```
+
+rather than:
+
+```rust
+Vec<Labeled<I, L>>
+```
+
+because a window is treated as a new dataset item.
+
+### Window Iterator
+
+Original:
+
+```rust
+Iterator<Item = Vec<I>>
+```
+
+Modified:
+
+```rust
+Iterator<Item = Labeled<Vec<I>, L>>
+```
+
+The iterator preserves labels established during window creation.
+
+---
+
+# Dataset Transform Summary
+
+All dataset transforms now preserve IFC labels.
+
+Transforms fall into two categories:
+
+### Index-Based Transforms
+
+These preserve both item type and label:
+
+```text
+SelectionDataset
+PartialDataset
+ShuffledDataset
+SamplerDataset
+ComposedDataset
+```
+
+Conceptually:
+
+```text
+Dataset<I, Secret>
+        ↓
+     Transform
+        ↓
+Dataset<I, Secret>
+```
+
+### Value-Transforming Transforms
+
+These change the item representation while preserving labels:
+
+```text
+MapperDataset
+WindowsDataset
+```
+
+Conceptually:
+
+```text
+Dataset<I, Secret>
+        ↓
+     Transform
+        ↓
+Dataset<O, Secret>
+```
+
+or:
+
+```text
+Dataset<I, Secret>
+        ↓
+     Window
+        ↓
+Dataset<Vec<I>, Secret>
+```
+
+In all cases, security labels are preserved and no transform performs declassification.
 
 ---
 

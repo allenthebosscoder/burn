@@ -90,6 +90,8 @@ burn-std = { workspace = true }
 burn-dataset = { workspace = true, optional = true }
 burn-derive = { workspace = true }
 burn-tensor = { workspace = true }
+macros = { path = "../../fg_ifc_library/macros" }
+typing_rules = { path = "../../fg_ifc_library/typing_rules" }
 
 # Backend extensions
 burn-backend = { workspace = true, optional = true }

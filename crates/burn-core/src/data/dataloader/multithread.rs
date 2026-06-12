@@ -9,46 +9,48 @@ use super::batcher::Batcher;
 use super::{BatchDataLoader, BatchStrategy, DataLoader, DataLoaderIterator, Progress};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
+use typing_rules::*; // import filament ifc
 
 const MAX_QUEUED_ITEMS: usize = 100;
 
 type RngSeed = <StdRng as SeedableRng>::Seed;
 
 /// A multi-threaded data loader that can be used to iterate over a dataset.
-pub struct MultiThreadDataLoader<I, O> {
+pub struct MultiThreadDataLoader<I, O, L: Label> {
     // Configuration parameters needed for initialization
-    strategy: Box<dyn BatchStrategy<I>>,
-    dataset: Arc<dyn Dataset<I>>,
-    batcher: Arc<dyn Batcher<I, O>>,
+    strategy: Box<dyn BatchStrategy<I, L>>,
+    dataset: Arc<dyn Dataset<I, L>>,
+    batcher: Arc<dyn Batcher<I, O, L>>,
     device: Device,
     seed: Option<RngSeed>,
     num_threads: usize,
 
     // The lazily initialized data loaders
-    dataloaders: OnceLock<Vec<BatchDataLoader<I, O>>>,
+    dataloaders: OnceLock<Vec<BatchDataLoader<I, O, L>>>,
 }
 
 /// A message that can be sent between threads.
-#[derive(Debug)]
-pub enum Message<O> {
+//#[derive(Debug)]
+pub enum Message<O, L: Label> {
     /// A batch of items.
-    Batch(usize, O, Progress),
+    Batch(usize, Labeled<O, L>, Progress),
 
     /// The thread is done.
     Done,
 }
 
-struct MultiThreadsDataloaderIterator<O> {
+struct MultiThreadsDataloaderIterator<O, L: Label> {
     num_done: usize,
     workers: Vec<thread::JoinHandle<()>>,
-    receiver: mpsc::Receiver<Message<O>>,
+    receiver: mpsc::Receiver<Message<O, L>>,
     progresses: Vec<Progress>,
 }
 
-impl<I, O> MultiThreadDataLoader<I, O>
+impl<I, O, L> MultiThreadDataLoader<I, O, L>
 where
     I: Send + Sync + Clone + 'static,
     O: Send + 'static,
+    L: Label,
 {
     /// Creates a new multi-threaded batch data loader.
     ///
@@ -66,9 +68,9 @@ where
     ///
     /// The multi-threaded batch data loader.
     pub fn new(
-        strategy: Box<dyn BatchStrategy<I>>,
-        dataset: Arc<dyn Dataset<I>>,
-        batcher: Arc<dyn Batcher<I, O>>,
+        strategy: Box<dyn BatchStrategy<I, L>>,
+        dataset: Arc<dyn Dataset<I, L>>,
+        batcher: Arc<dyn Batcher<I, O, L>>,
         num_threads: usize,
         device: Device,
         rng: Option<rand::rngs::StdRng>,
@@ -86,9 +88,9 @@ where
     }
 
     fn from_seed(
-        strategy: Box<dyn BatchStrategy<I>>,
-        dataset: Arc<dyn Dataset<I>>,
-        batcher: Arc<dyn Batcher<I, O>>,
+        strategy: Box<dyn BatchStrategy<I, L>>,
+        dataset: Arc<dyn Dataset<I, L>>,
+        batcher: Arc<dyn Batcher<I, O, L>>,
         num_threads: usize,
         device: Device,
         seed: Option<RngSeed>,
@@ -105,7 +107,7 @@ where
     }
 
     /// Force initialization if needed.
-    fn initialize(&self) -> &[BatchDataLoader<I, O>] {
+    fn initialize(&self) -> &[BatchDataLoader<I, O, L>] {
         self.dataloaders
             .get_or_init(|| {
                 let mut dataset = self.dataset.clone();
@@ -152,16 +154,17 @@ where
     }
 }
 
-impl<I, O> DataLoader<O> for MultiThreadDataLoader<I, O>
+impl<I, O, L> DataLoader<O, L> for MultiThreadDataLoader<I, O, L>
 where
     I: Send + Sync + Clone + 'static,
     O: Send + 'static + std::fmt::Debug,
+    L: Label
 {
-    fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<O> + 'a> {
+    fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<O, L> + 'a> {
         // This will initialize the loader if it hasn't been initialized yet
         let dataloaders = self.initialize();
 
-        let (sender, receiver) = mpsc::sync_channel::<Message<O>>(MAX_QUEUED_ITEMS);
+        let (sender, receiver) = mpsc::sync_channel::<Message<O, L>>(MAX_QUEUED_ITEMS);
 
         let mut progresses = Vec::with_capacity(dataloaders.len());
 
@@ -206,7 +209,7 @@ where
         self.dataset.len()
     }
 
-    fn to_device(&self, device: &Device) -> Arc<dyn DataLoader<O>> {
+    fn to_device(&self, device: &Device) -> Arc<dyn DataLoader<O, L>> {
         Arc::new(Self::from_seed(
             self.strategy.clone_dyn(),
             self.dataset.clone(),
@@ -217,7 +220,7 @@ where
         ))
     }
 
-    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<O>> {
+    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<O, L>> {
         let dataloader = Self::from_seed(
             self.strategy.clone_dyn(),
             Arc::new(PartialDataset::new(self.dataset.clone(), start, end)),
@@ -230,9 +233,9 @@ where
     }
 }
 
-impl<O> MultiThreadsDataloaderIterator<O> {
+impl<O, L: Label> MultiThreadsDataloaderIterator<O, L> {
     pub fn new(
-        receiver: mpsc::Receiver<Message<O>>,
+        receiver: mpsc::Receiver<Message<O, L>>,
         workers: Vec<thread::JoinHandle<()>>,
         progresses: Vec<Progress>,
     ) -> Self {
@@ -244,7 +247,7 @@ impl<O> MultiThreadsDataloaderIterator<O> {
         }
     }
 }
-impl<O: std::fmt::Debug> DataLoaderIterator<O> for MultiThreadsDataloaderIterator<O> {
+impl<O: std::fmt::Debug, L: Label> DataLoaderIterator<O, L> for MultiThreadsDataloaderIterator<O, L> {
     fn progress(&self) -> Progress {
         let mut items_total = 0;
         let mut items_processed = 0;
@@ -259,10 +262,10 @@ impl<O: std::fmt::Debug> DataLoaderIterator<O> for MultiThreadsDataloaderIterato
     }
 }
 
-impl<O: std::fmt::Debug> Iterator for MultiThreadsDataloaderIterator<O> {
-    type Item = O;
+impl<O: std::fmt::Debug, L: Label> Iterator for MultiThreadsDataloaderIterator<O, L> {
+    type Item = Labeled<O, L>;
 
-    fn next(&mut self) -> Option<O> {
+    fn next(&mut self) -> Option<Labeled<O, L>> {
         if self.workers.is_empty() {
             return None;
         }
