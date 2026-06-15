@@ -859,7 +859,11 @@ Labeled<I, Secret>
 
 # SqliteDataset
 
-SqliteDataset differs from InMemDataset because it does not store dataset records in memory.
+# SqliteDataset
+
+SqliteDataset represents a labeled dataset whose records are stored externally in SQLite.
+
+Unlike InMemDataset, SqliteDataset does not store all records directly in Burn memory. The SQLite database stores raw external rows.
 
 Instead it stores:
 
@@ -871,6 +875,11 @@ SQL queries
 ```
 
 The actual records remain inside SQLite.
+
+However, the dataset abstraction itself is still labeled:
+```rust
+SqliteDataset<I, L>
+```
 
 ---
 

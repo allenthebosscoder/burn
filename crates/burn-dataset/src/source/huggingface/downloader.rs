@@ -7,6 +7,7 @@ use crate::{SqliteDataset, SqliteDatasetError, SqliteDatasetStorage};
 use sanitize_filename::sanitize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
+use typing_rules::*; // import filament ifc
 
 const PYTHON_SOURCE: &str = include_str!("importer.py");
 #[cfg(not(target_os = "windows"))]
@@ -151,10 +152,10 @@ impl HuggingfaceDatasetLoader {
     }
 
     /// Load the dataset.
-    pub fn dataset<I: DeserializeOwned + Clone>(
+    pub fn dataset<I: DeserializeOwned + Clone, L: Label>(
         self,
         split: &str,
-    ) -> Result<SqliteDataset<I>, ImporterError> {
+    ) -> Result<SqliteDataset<I, L>, ImporterError> {
         let db_file = self.db_file()?;
         let dataset = SqliteDataset::from_db_file(db_file, split)?;
         Ok(dataset)

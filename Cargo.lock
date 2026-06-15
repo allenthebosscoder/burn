@@ -792,6 +792,7 @@ dependencies = [
  "half",
  "hashbrown 0.16.1",
  "log",
+ "macros",
  "num-traits",
  "portable-atomic",
  "portable-atomic-util",
@@ -804,6 +805,7 @@ dependencies = [
  "serial_test",
  "spin",
  "thiserror 2.0.18",
+ "typing_rules",
 ]
 
 [[package]]
@@ -877,6 +879,7 @@ dependencies = [
  "globwalk",
  "hound",
  "image",
+ "macros",
  "planus",
  "polars",
  "r2d2",
@@ -894,6 +897,7 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.18",
+ "typing_rules",
  "zip 8.6.0",
 ]
 

@@ -90,7 +90,7 @@ impl From<&'static str> for SqliteDatasetError {
 /// Note: The code automatically figures out which of the above two cases is applicable, and uses the appropriate
 /// method to read the data from the table.
 #[derive(Debug)]
-pub struct SqliteDataset<I> {
+pub struct SqliteDataset<I, L: Label> {
     db_file: PathBuf,
     split: String,
     conn_pool: Pool<SqliteConnectionManager>,
@@ -98,10 +98,10 @@ pub struct SqliteDataset<I> {
     len: usize,
     select_statement: String,
     row_serialized: bool,
-    phantom: PhantomData<I>,
+    phantom: PhantomData<Labeled<I, L>>,
 }
 
-impl<I> SqliteDataset<I> {
+impl<I, L: Label> SqliteDataset<I, L> {
     /// Initializes a `SqliteDataset` from a SQLite database file and a split name.
     pub fn from_db_file<P: AsRef<Path>>(db_file: P, split: &str) -> Result<Self> {
         // Create a connection pool
@@ -194,7 +194,7 @@ impl<I> SqliteDataset<I> {
     }
 }
 
-impl<I, L> Dataset<I, L> for SqliteDataset<I>
+impl<I, L> Dataset<I, L> for SqliteDataset<I, L>
 where
     I: Clone + Send + Sync + DeserializeOwned,
     L: Label
@@ -396,9 +396,10 @@ impl SqliteDatasetStorage {
     /// # Returns
     ///
     /// * A `Result` which is `Ok` if the reader could be created, `Err` otherwise.
-    pub fn reader<I>(&self, split: &str) -> Result<SqliteDataset<I>>
+    pub fn reader<I, L>(&self, split: &str) -> Result<SqliteDataset<I, L>>
     where
         I: Clone + Send + Sync + Serialize + DeserializeOwned,
+        L: Label
     {
         if !self.exists() {
             panic!("The database file does not exist");
