@@ -73,7 +73,7 @@ opentelemetry_sdk = "0.31.0"
 parking_lot = { version = "0.12.5", default-features = false }
 paste = "1"
 planus = { version = "=1.1" }
-polars = { version = "0.53.0", features = ["lazy"] }
+polars = { version = "0.54.0", features = ["lazy", "strings"] }
 pretty_assertions = "1.4.1"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"
@@ -222,7 +222,7 @@ burn-wgpu = { path = "crates/burn-wgpu", version = "0.22.0-pre.1", default-featu
 cubecl = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "ba103c7f118524652647338dec09abf69a24a53e" }
 cubecl-common = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "ba103c7f118524652647338dec09abf69a24a53e" }
 cubecl-zspace = { git = "https://github.com/tracel-ai/cubecl", default-features = false, rev = "ba103c7f118524652647338dec09abf69a24a53e" }
-cubek = { git = "https://github.com/tracel-ai/cubek", default-features = false, rev = "e6a634f1bd0c3a72325228d308462ec0c5c96456" }
+cubek = { git = "https://github.com/tracel-ai/cubek", default-features = false, rev = "9deb872362a0756369a50737389d0051126ba8bc" }
 ### For local development. ###
 # cubecl = { path = "../cubecl/crates/cubecl", default-features = false }
 # cubecl-common = { path = "../cubecl/crates/cubecl-common", default-features = false }
