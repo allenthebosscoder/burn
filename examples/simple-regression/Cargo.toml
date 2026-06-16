@@ -19,6 +19,8 @@ remote = ["burn/remote"]
 
 [dependencies]
 burn = { workspace = true, features = ["default", "train"] }
+macros = { path = "../../fg_ifc_library/macros" }
+typing_rules = { path = "../../fg_ifc_library/typing_rules" }
 
 # Serialization
 log = { workspace = true }

@@ -1,6 +1,7 @@
 use std::fs::{File, create_dir_all};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use typing_rules::*; // import filament ifc
 
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
@@ -61,18 +62,19 @@ impl Mapper<MnistItemRaw, MnistItem> for BytesToImage {
     }
 }
 
-type MappedDataset = MapperDataset<InMemDataset<MnistItemRaw>, BytesToImage, MnistItemRaw>;
+type MappedDataset <L: Label> =
+    MapperDataset<InMemDataset<MnistItemRaw, L>, BytesToImage, MnistItemRaw, L>;
 
 /// The MNIST dataset consists of 70,000 28x28 black-and-white images in 10 classes (one for each digits), with 7,000
 /// images per class. There are 60,000 training images and 10,000 test images.
 ///
 /// The data is downloaded from the web from the [CVDF mirror](https://github.com/cvdfoundation/mnist).
-pub struct MnistDataset {
-    dataset: MappedDataset,
+pub struct MnistDataset<L: Label> {
+    dataset: MappedDataset<L>,
 }
 
-impl Dataset<MnistItem> for MnistDataset {
-    fn get(&self, index: usize) -> Option<MnistItem> {
+impl<L: Label> Dataset<MnistItem, L> for MnistDataset<L> {
+    fn get(&self, index: usize) -> Option<Labeled<MnistItem, L>> {
         self.dataset.get(index)
     }
 
@@ -81,7 +83,7 @@ impl Dataset<MnistItem> for MnistDataset {
     }
 }
 
-impl MnistDataset {
+impl<L: Label> MnistDataset<L> {
     /// Creates a new train dataset.
     pub fn train() -> Self {
         Self::new("train")
@@ -94,21 +96,24 @@ impl MnistDataset {
 
     fn new(split: &str) -> Self {
         // Download dataset
-        let root = MnistDataset::download(split);
+        let root = MnistDataset::<L>::download(split);
 
         // MNIST is tiny so we can load it in-memory
         // Train images (u8): 28 * 28 * 60000 = 47.04Mb
         // Test images (u8): 28 * 28 * 10000 = 7.84Mb
-        let images = MnistDataset::read_images(&root, split);
-        let labels = MnistDataset::read_labels(&root, split);
+        let images = MnistDataset::<L>::read_images(&root, split);
+        let labels = MnistDataset::<L>::read_labels(&root, split);
 
         // Collect as vector of MnistItemRaw
         let items: Vec<_> = images
             .into_iter()
             .zip(labels)
-            .map(|(image_bytes, label)| MnistItemRaw { image_bytes, label })
+            .map(|(image_bytes, label)| {
+                Labeled::<_, L>::new(
+                    MnistItemRaw { image_bytes, label }
+                )
+            })
             .collect();
-
         let dataset = InMemDataset::new(items);
         let dataset = MapperDataset::new(dataset, BytesToImage);
 
@@ -131,12 +136,12 @@ impl MnistDataset {
         // Download split files
         match split {
             "train" => {
-                MnistDataset::download_file(TRAIN_IMAGES, &split_dir);
-                MnistDataset::download_file(TRAIN_LABELS, &split_dir);
+                MnistDataset::<L>::download_file(TRAIN_IMAGES, &split_dir);
+                MnistDataset::<L>::download_file(TRAIN_LABELS, &split_dir);
             }
             "test" => {
-                MnistDataset::download_file(TEST_IMAGES, &split_dir);
-                MnistDataset::download_file(TEST_LABELS, &split_dir);
+                MnistDataset::<L>::download_file(TEST_IMAGES, &split_dir);
+                MnistDataset::<L>::download_file(TEST_LABELS, &split_dir);
             }
             _ => panic!("Invalid split specified {split}"),
         };

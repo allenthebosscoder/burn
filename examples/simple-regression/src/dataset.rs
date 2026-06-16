@@ -6,6 +6,8 @@ use burn::{
     prelude::*,
 };
 
+use typing_rules::*; // import filament ifc
+
 pub const NUM_FEATURES: usize = 8;
 
 // Pre-computed statistics for the housing dataset features

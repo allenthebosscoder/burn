@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use typing_rules::*; // import filament ifc
 
 const SUPPORTED_FILES: [&str; 4] = ["bmp", "jpg", "jpeg", "png"];
 const BBOX_MIN_NUM_VALUES: usize = 4;
@@ -451,16 +452,16 @@ pub enum ImageLoaderError {
     ParsingError(String),
 }
 
-type ImageDatasetMapper =
-    MapperDataset<InMemDataset<ImageDatasetItemRaw>, PathToImageDatasetItem, ImageDatasetItemRaw>;
+type ImageDatasetMapper<L: Label> =
+    MapperDataset<InMemDataset<ImageDatasetItemRaw, L>, PathToImageDatasetItem, ImageDatasetItemRaw, L>;
 
 /// A generic dataset to load images from disk.
-pub struct ImageFolderDataset {
-    dataset: ImageDatasetMapper,
+pub struct ImageFolderDataset<L: Label> {
+    dataset: ImageDatasetMapper<L>,
 }
 
-impl Dataset<ImageDatasetItem> for ImageFolderDataset {
-    fn get(&self, index: usize) -> Option<ImageDatasetItem> {
+impl<L: Label> Dataset<ImageDatasetItem, L> for ImageFolderDataset<L> {
+    fn get(&self, index: usize) -> Option<Labeled<ImageDatasetItem, L>> {
         self.dataset.get(index)
     }
 
@@ -469,7 +470,7 @@ impl Dataset<ImageDatasetItem> for ImageFolderDataset {
     }
 }
 
-impl ImageFolderDataset {
+impl<L: Label> ImageFolderDataset<L> {
     /// Create an image classification dataset from the root folder.
     ///
     /// # Arguments
@@ -669,6 +670,10 @@ impl ImageFolderDataset {
         let classes = parse_coco_classes(&json)?;
         let annotations = parse_coco_bbox_annotations(&json)?;
         let items = parse_coco_images(&images_path, annotations, &json)?;
+        let items: Vec<_> = items
+            .into_iter()
+            .map(Labeled::<_, L>::new)
+            .collect();
         let dataset = InMemDataset::new(items);
         let mapper = PathToImageDatasetItem { classes };
         let dataset = MapperDataset::new(dataset, mapper);
@@ -691,6 +696,10 @@ impl ImageFolderDataset {
     ) -> Result<Self, ImageLoaderError> {
         // NOTE: right now we don't need to validate the supported image files since
         // the method is private. We assume it's already validated.
+        let items: Vec<_> = items
+            .into_iter()
+            .map(Labeled::<_, L>::new)
+            .collect();
         let dataset = InMemDataset::new(items);
 
         // Class names to index map

@@ -8265,9 +8265,11 @@ version = "0.22.0-pre.1"
 dependencies = [
  "burn",
  "log",
+ "macros",
  "rgb",
  "serde",
  "textplots",
+ "typing_rules",
 ]
 
 [[package]]
