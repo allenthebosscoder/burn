@@ -56,11 +56,11 @@ pub struct HousingDistrictItem {
 }
 
 pub struct HousingDataset {
-    dataset: SqliteDataset<HousingDistrictItem>,
+    dataset: SqliteDataset<HousingDistrictItem, L: Label>,
 }
 
-impl Dataset<HousingDistrictItem> for HousingDataset {
-    fn get(&self, index: usize) -> Option<HousingDistrictItem> {
+impl Dataset<HousingDistrictItem, L: Label> for HousingDataset {
+    fn get(&self, index: usize) -> Option<Labeled<HousingDistrictItem, L>> {
         self.dataset.get(index)
     }
 

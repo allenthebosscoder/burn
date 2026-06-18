@@ -53,16 +53,8 @@ impl<LC: LearningComponentsTypes, L: Label> Worker<LC, L> {
                     Ok(item) => {
                         let model = item.model.fork(&device);
                         
-                        let output = (model).__chain_ref(|__v0| {
-                            (item.item).__chain(|__v1| {
-
-                                let _: TrainingModelInput<LC> = __v1;
-
-                                Labeled::<_, Public>::new(
-                                    TrainStep::step(__v0, __v1)
-                                )
-                            })
-                        });
+                        
+                        let output = fcall!(TrainStep::step(&model, item.item));
                         //let output = model.step(item.item);
                         let item = MultiTrainOutput { output, device_id };
 
