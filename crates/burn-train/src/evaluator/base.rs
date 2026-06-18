@@ -7,14 +7,15 @@ use crate::{
 };
 use burn_core::{data::dataloader::DataLoader, module::Module};
 use std::sync::Arc;
+use typing_rules::*; // import filament ifc
 
 pub(crate) type TestInput<EC> = <<EC as EvaluatorComponentTypes>::Model as InferenceStep>::Input;
 pub(crate) type TestOutput<EC> = <<EC as EvaluatorComponentTypes>::Model as InferenceStep>::Output;
 
-pub(crate) type TestLoader<EC> = Arc<dyn DataLoader<TestInput<EC>>>;
+pub(crate) type TestLoader<EC, L: Label> = Arc<dyn DataLoader<TestInput<EC>, L>>;
 
 /// Evaluates a model on a specific dataset.
-pub struct Evaluator<EC: EvaluatorComponentTypes> {
+pub struct Evaluator<EC: EvaluatorComponentTypes, L: Label> {
     pub(crate) model: EC::Model,
     pub(crate) interrupter: Interrupter,
     pub(crate) event_processor:
@@ -23,14 +24,14 @@ pub struct Evaluator<EC: EvaluatorComponentTypes> {
     pub summary: Option<LearnerSummaryConfig>,
 }
 
-impl<EC: EvaluatorComponentTypes> Evaluator<EC> {
+impl<EC: EvaluatorComponentTypes, L: Label> Evaluator<EC, L> {
     /// Run the evaluation on the given dataset.
     ///
     /// The data will be stored and displayed under the provided name.
     pub fn eval<S: core::fmt::Display>(
         self,
         name: S,
-        dataloader: TestLoader<EC>,
+        dataloader: TestLoader<EC, L>,
     ) -> Box<dyn MetricsRenderer> {
         self.eval_all([(name, dataloader)])
     }
@@ -41,7 +42,7 @@ impl<EC: EvaluatorComponentTypes> Evaluator<EC> {
     /// receives the correct `total_tests` count and `end_test` is called between splits.
     pub fn eval_all<S: core::fmt::Display>(
         mut self,
-        splits: impl IntoIterator<Item = (S, TestLoader<EC>)>,
+        splits: impl IntoIterator<Item = (S, TestLoader<EC, L>)>,
     ) -> Box<dyn MetricsRenderer> {
         let splits: Vec<_> = splits.into_iter().collect();
         let total_tests = splits.len();

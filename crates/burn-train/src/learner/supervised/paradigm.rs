@@ -31,11 +31,12 @@ use burn_optim::lr_scheduler::LrScheduler;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use typing_rules::*; // import filament ifc
 
 /// A reference to the training split [DataLoader](DataLoader).
-pub type TrainLoader<LC> = Arc<dyn DataLoader<TrainingModelInput<LC>>>;
+pub type TrainLoader<LC, L: Label> = Arc<dyn DataLoader<TrainingModelInput<LC>, L>>;
 /// A reference to the validation split [DataLoader](DataLoader).
-pub type ValidLoader<LC> = Arc<dyn DataLoader<InferenceModelInput<LC>>>;
+pub type ValidLoader<LC, L: Label> = Arc<dyn DataLoader<InferenceModelInput<LC>, L>>;
 /// The event processor type for supervised learning.
 pub type SupervisedTrainingEventProcessor<LC> = AsyncProcessorTraining<
     LearnerEvent<TrainingModelOutput<LC>>,
@@ -43,9 +44,10 @@ pub type SupervisedTrainingEventProcessor<LC> = AsyncProcessorTraining<
 >;
 
 /// Structure to configure and launch supervised learning trainings.
-pub struct SupervisedTraining<LC>
+pub struct SupervisedTraining<LC, L>
 where
     LC: LearningComponentsTypes,
+    L: Label
 {
     // Not that complex. Extracting into another type would only make it more confusing.
     #[allow(clippy::type_complexity)]
@@ -66,20 +68,21 @@ where
     tracing_logger: Option<Box<dyn ApplicationLoggerInstaller>>,
     checkpointer_strategy: Box<dyn CheckpointingStrategy>,
     early_stopping: Option<EarlyStoppingStrategyRef>,
-    training_strategy: Option<TrainingStrategy<LC>>,
-    dataloader_train: TrainLoader<LC>,
-    dataloader_valid: ValidLoader<LC>,
+    training_strategy: Option<TrainingStrategy<LC, L>>,
+    dataloader_train: TrainLoader<LC, L>,
+    dataloader_valid: ValidLoader<LC, L>,
     // Use BTreeSet instead of HashSet for consistent (alphabetical) iteration order
     summary_metrics: BTreeSet<String>,
     summary: bool,
     progress_logger: Option<Box<dyn TrainingProgressLogger>>,
 }
 
-impl<LR, M, O> SupervisedTraining<LearningComponentsMarker<LR, M, O>>
+impl<LR, M, O, L> SupervisedTraining<LearningComponentsMarker<LR, M, O>, L>
 where
     LR: LrScheduler + 'static,
     M: TrainStep + InferenceStep + AutodiffModule + core::fmt::Display + 'static,
     O: Optimizer<M> + 'static,
+    L: Label
 {
     /// Creates a new runner for a supervised training.
     ///
@@ -90,8 +93,8 @@ where
     /// * `dataloader_valid` - The dataloader for the validation split.
     pub fn new(
         directory: impl AsRef<Path>,
-        dataloader_train: Arc<dyn DataLoader<<M as TrainStep>::Input>>,
-        dataloader_valid: Arc<dyn DataLoader<<M as InferenceStep>::Input>>,
+        dataloader_train: Arc<dyn DataLoader<<M as TrainStep>::Input, L>>,
+        dataloader_valid: Arc<dyn DataLoader<<M as InferenceStep>::Input, L>>,
     ) -> Self {
         let directory = directory.as_ref().to_path_buf();
         let experiment_log_file = directory.join("experiment.log");
@@ -131,13 +134,13 @@ where
     }
 }
 
-impl<LC: LearningComponentsTypes> SupervisedTraining<LC> {
+impl<LC: LearningComponentsTypes, L: Label> SupervisedTraining<LC, L> {
     /// Replace the default training strategy (SingleDeviceTrainingStrategy) with the provided one.
     ///
     /// # Arguments
     ///
     /// * `training_strategy` - The training strategy.
-    pub fn with_training_strategy(mut self, training_strategy: TrainingStrategy<LC>) -> Self {
+    pub fn with_training_strategy(mut self, training_strategy: TrainingStrategy<LC, L>) -> Self {
         self.training_strategy = Some(training_strategy);
         self
     }
@@ -196,12 +199,12 @@ impl<LC: LearningComponentsTypes> SupervisedTraining<LC> {
     }
 
     /// Register all metrics as numeric for the training and validation set.
-    pub fn metrics<Me: MetricRegistration<LC>>(self, metrics: Me) -> Self {
+    pub fn metrics<Me: MetricRegistration<LC, L>>(self, metrics: Me) -> Self {
         metrics.register(self)
     }
 
     /// Register all metrics as text for the training and validation set.
-    pub fn metrics_text<Me: TextMetricRegistration<LC>>(self, metrics: Me) -> Self {
+    pub fn metrics_text<Me: TextMetricRegistration<LC, L>>(self, metrics: Me) -> Self {
         metrics.register(self)
     }
 
@@ -347,9 +350,10 @@ impl<LC: LearningComponentsTypes> SupervisedTraining<LC> {
     }
 }
 
-impl<LC> SupervisedTraining<LC>
+impl<LC, L> SupervisedTraining<LC, L>
 where
     LC: LearningComponentsTypes + Send + 'static,
+    L: Label,
 {
     /// Launch this training with the given [Learner](Learner).
     pub fn launch(mut self, learner: Learner<LC>) -> LearningResult<InferenceModel<LC>> {
@@ -435,7 +439,7 @@ where
                     )
                 }
                 ExecutionStrategy::MultiDevice(devices, multi_device_optim) => {
-                    let strategy: Box<dyn SupervisedLearningStrategy<LC>> = match devices.len() == 1
+                    let strategy: Box<dyn SupervisedLearningStrategy<LC, L>> = match devices.len() == 1
                     {
                         true => Box::new(SingleDeviceTrainingStrategy::new(autodiff_device(
                             devices[0].clone(),
@@ -492,20 +496,20 @@ fn autodiff_device(mut device: Device, grad_checkpointing: bool) -> Device {
 }
 
 /// Trait to fake variadic generics.
-pub trait MetricRegistration<LC: LearningComponentsTypes>: Sized {
+pub trait MetricRegistration<LC: LearningComponentsTypes, L: Label>: Sized {
     /// Register the metrics.
-    fn register(self, builder: SupervisedTraining<LC>) -> SupervisedTraining<LC>;
+    fn register(self, builder: SupervisedTraining<LC, L>) -> SupervisedTraining<LC, L>;
 }
 
 /// Trait to fake variadic generics.
-pub trait TextMetricRegistration<LC: LearningComponentsTypes>: Sized {
+pub trait TextMetricRegistration<LC: LearningComponentsTypes, L: Label>: Sized {
     /// Register the metrics.
-    fn register(self, builder: SupervisedTraining<LC>) -> SupervisedTraining<LC>;
+    fn register(self, builder: SupervisedTraining<LC, L>) -> SupervisedTraining<LC, L>;
 }
 
 macro_rules! gen_tuple {
     ($($M:ident),*) => {
-        impl<$($M,)* LC: LearningComponentsTypes> TextMetricRegistration<LC> for ($($M,)*)
+        impl<$($M,)* LC: LearningComponentsTypes, L: Label> TextMetricRegistration<LC, L> for ($($M,)*)
         where
             $(TrainingModelOutput<LC>: Adaptor<$M::Input>,)*
             $(InferenceModelOutput<LC>: Adaptor<$M::Input>,)*
@@ -514,8 +518,8 @@ macro_rules! gen_tuple {
             #[allow(non_snake_case)]
             fn register(
                 self,
-                builder: SupervisedTraining<LC>,
-            ) -> SupervisedTraining<LC> {
+                builder: SupervisedTraining<LC, L>,
+            ) -> SupervisedTraining<LC, L> {
                 let ($($M,)*) = self;
                 $(let builder = builder.metric_train($M.clone());)*
                 $(let builder = builder.metric_valid($M);)*
@@ -523,7 +527,7 @@ macro_rules! gen_tuple {
             }
         }
 
-        impl<$($M,)* LC: LearningComponentsTypes> MetricRegistration<LC> for ($($M,)*)
+        impl<$($M,)* LC: LearningComponentsTypes, L: Label> MetricRegistration<LC, L> for ($($M,)*)
         where
             $(TrainingModelOutput<LC>: Adaptor<$M::Input>,)*
             $(InferenceModelOutput<LC>: Adaptor<$M::Input>,)*
@@ -532,8 +536,8 @@ macro_rules! gen_tuple {
             #[allow(non_snake_case)]
             fn register(
                 self,
-                builder: SupervisedTraining<LC>,
-            ) -> SupervisedTraining<LC> {
+                builder: SupervisedTraining<LC, L>,
+            ) -> SupervisedTraining<LC, L> {
                 let ($($M,)*) = self;
                 $(let builder = builder.metric_train_numeric($M.clone());)*
                 $(let builder = builder.metric_valid_numeric($M);)*

@@ -452,7 +452,7 @@ pub enum ImageLoaderError {
     ParsingError(String),
 }
 
-type ImageDatasetMapper<L: Label> =
+type ImageDatasetMapper<L> =
     MapperDataset<InMemDataset<ImageDatasetItemRaw, L>, PathToImageDatasetItem, ImageDatasetItemRaw, L>;
 
 /// A generic dataset to load images from disk.

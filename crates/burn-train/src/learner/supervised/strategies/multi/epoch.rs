@@ -9,15 +9,16 @@ use burn_core::data::dataloader::Progress;
 use burn_core::tensor::Device;
 use burn_optim::GradientsAccumulator;
 use burn_optim::MultiGradientsParams;
+use typing_rules::*; // import filament ifc
 
 /// A training epoch.
 #[derive(new)]
-pub struct MultiDeviceTrainEpoch<LC: LearningComponentsTypes> {
-    dataloaders: Vec<TrainLoader<LC>>,
+pub struct MultiDeviceTrainEpoch<LC: LearningComponentsTypes, L: Label> {
+    dataloaders: Vec<TrainLoader<LC, L>>,
     grad_accumulation: Option<usize>,
 }
 
-impl<LC: LearningComponentsTypes> MultiDeviceTrainEpoch<LC> {
+impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
     /// Runs the training epoch on multiple devices.
     ///
     /// # Arguments
@@ -84,7 +85,7 @@ impl<LC: LearningComponentsTypes> MultiDeviceTrainEpoch<LC> {
         let mut accumulation_current = 0;
 
         let accumulation = self.grad_accumulation.unwrap_or(1);
-        let step = MultiDevicesTrainStep::<LC>::new(&devices);
+        let step = MultiDevicesTrainStep::<LC, L>::new(&devices);
 
         // The main device is always the first in the list.
         let device_main = devices.first().expect("A minimum of one device.").clone();
@@ -157,7 +158,7 @@ impl<LC: LearningComponentsTypes> MultiDeviceTrainEpoch<LC> {
         let mut accumulation_current = 0;
 
         let accumulation = self.grad_accumulation.unwrap_or(1);
-        let step = MultiDevicesTrainStep::<LC>::new(&devices);
+        let step = MultiDevicesTrainStep::<LC, L>::new(&devices);
 
         loop {
             let (items, progress) = step.step(iterators.as_mut_slice(), &learner.model());

@@ -9,28 +9,31 @@ use crate::{
 use burn_core::tensor::Device;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use typing_rules::*; // import filament ifc
 
 /// A worker runs the model, syncing gradients using collective operations.
 /// Event processing and validation is optional too.
-pub(crate) struct DdpWorker<LC>
+pub(crate) struct DdpWorker<LC, L>
 where
     LC: LearningComponentsTypes + Send + 'static,
+    L: Label,
 {
     device: Device,
     learner: Learner<LC>,
     event_processor: Arc<Mutex<SupervisedTrainingEventProcessor<LC>>>,
     components: WorkerComponents,
     checkpointer: Option<LearningCheckpointer<LC>>,
-    dataloader_train: TrainLoader<LC>,
-    dataloader_valid: Option<ValidLoader<LC>>,
+    dataloader_train: TrainLoader<LC, L>,
+    dataloader_valid: Option<ValidLoader<LC, L>>,
     starting_epoch: usize,
     peer_count: usize,
     is_main: bool,
 }
 
-impl<LC> DdpWorker<LC>
+impl<LC, L> DdpWorker<LC, L>
 where
     LC: LearningComponentsTypes + Send + 'static,
+    L: Label
 {
     /// Starts a worker that runs the model in a data distributed parallel
     #[allow(clippy::too_many_arguments)]
@@ -40,8 +43,8 @@ where
         event_processor: Arc<Mutex<SupervisedTrainingEventProcessor<LC>>>,
         components: WorkerComponents,
         checkpointer: Option<LearningCheckpointer<LC>>,
-        dataloader_train: TrainLoader<LC>,
-        dataloader_valid: Option<ValidLoader<LC>>,
+        dataloader_train: TrainLoader<LC, L>,
+        dataloader_valid: Option<ValidLoader<LC, L>>,
         starting_epoch: usize,
         peer_count: usize,
         is_main: bool,
@@ -68,13 +71,13 @@ where
         let interrupter = self.components.interrupter;
 
         // Changed the train epoch to keep the dataloaders
-        let epoch_train = DdpTrainEpoch::<LC>::new(
+        let epoch_train = DdpTrainEpoch::<LC, L>::new(
             self.dataloader_train.clone(),
             self.components.grad_accumulation,
         );
         let epoch_valid = self
             .dataloader_valid
-            .map(|dataloader| DdpValidEpoch::<LC>::new(dataloader));
+            .map(|dataloader| DdpValidEpoch::<LC, L>::new(dataloader));
         self.learner.fork(&self.device);
         self.learner.grad_sharded();
 

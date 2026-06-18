@@ -62,7 +62,7 @@ impl Mapper<MnistItemRaw, MnistItem> for BytesToImage {
     }
 }
 
-type MappedDataset <L: Label> =
+type MappedDataset <L> =
     MapperDataset<InMemDataset<MnistItemRaw, L>, BytesToImage, MnistItemRaw, L>;
 
 /// The MNIST dataset consists of 70,000 28x28 black-and-white images in 10 classes (one for each digits), with 7,000

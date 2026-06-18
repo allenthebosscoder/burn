@@ -11,6 +11,7 @@ use crate::{
 use burn_core::data::dataloader::split::split_dataloader;
 use burn_core::tensor::Device;
 use burn_core::tensor::distributed::DistributedContext;
+use typing_rules::*; // import filament ifc
 
 #[derive(Clone)]
 pub(crate) struct WorkerComponents {
@@ -50,16 +51,17 @@ impl DdpTrainingStrategy {
     }
 }
 
-impl<LC> SupervisedLearningStrategy<LC> for DdpTrainingStrategy
+impl<LC, L> SupervisedLearningStrategy<LC, L> for DdpTrainingStrategy
 where
     LC: LearningComponentsTypes + Send + 'static,
+    L: Label,
 {
     fn fit(
         &self,
         training_components: TrainingComponents<LC>,
         learner: Learner<LC>,
-        dataloader_train: TrainLoader<LC>,
-        dataloader_valid: ValidLoader<LC>,
+        dataloader_train: TrainLoader<LC, L>,
+        dataloader_valid: ValidLoader<LC, L>,
         starting_epoch: usize,
     ) -> (TrainingModel<LC>, SupervisedTrainingEventProcessor<LC>) {
         // The reference model is always on the first device provided.
@@ -89,7 +91,7 @@ where
 
         // Start worker for main device
         // First training dataloader corresponds to main device
-        let main_handle = DdpWorker::<LC>::start(
+        let main_handle = DdpWorker::<LC, L>::start(
             main_device.clone(),
             learner.clone(),
             event_processor.clone(),
@@ -105,7 +107,7 @@ where
         // Spawn other workers for the other devices, starting with peer id 1
         let mut secondary_workers = vec![];
         for device in &self.devices[1..] {
-            let handle = DdpWorker::<LC>::start(
+            let handle = DdpWorker::<LC, L>::start(
                 device.clone(),
                 learner.clone(),
                 event_processor.clone(),

@@ -16,12 +16,13 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use typing_rules::*; // import filament ifc
 
 /// Struct to configure and create an [evaluator](Evaluator).
 ///
 /// The generics components of the builder should probably not be set manually, as they are
 /// optimized for Rust type inference.
-pub struct EvaluatorBuilder<EC: EvaluatorComponentTypes> {
+pub struct EvaluatorBuilder<EC: EvaluatorComponentTypes, L: Label> {
     tracing_logger: Option<Box<dyn ApplicationLoggerInstaller>>,
     event_store: LogEventStore,
     summary_metrics: BTreeSet<String>,
@@ -33,9 +34,10 @@ pub struct EvaluatorBuilder<EC: EvaluatorComponentTypes> {
     progress_logger: Option<Box<dyn EvaluationProgressLogger>>,
 }
 
-impl<M> EvaluatorBuilder<EvaluatorComponentTypesMarker<M>>
+impl<M, L> EvaluatorBuilder<EvaluatorComponentTypesMarker<M>, L>
 where
     M: Module + InferenceStep + core::fmt::Display + 'static,
+    L: Label,
 {
     /// Creates a new evaluator builder.
     ///
@@ -60,14 +62,14 @@ where
     }
 }
 
-impl<EC: EvaluatorComponentTypes> EvaluatorBuilder<EC> {
+impl<EC: EvaluatorComponentTypes, L: Label> EvaluatorBuilder<EC, L> {
     /// Registers [numeric](crate::metric::Numeric) test [metrics](Metric).
-    pub fn metrics<Me: EvalMetricRegistration<EC>>(self, metrics: Me) -> Self {
+    pub fn metrics<Me: EvalMetricRegistration<EC, L>>(self, metrics: Me) -> Self {
         metrics.register(self)
     }
 
     /// Registers text [metrics](Metric).
-    pub fn metrics_text<Me: EvalTextMetricRegistration<EC>>(self, metrics: Me) -> Self {
+    pub fn metrics_text<Me: EvalTextMetricRegistration<EC, L>>(self, metrics: Me) -> Self {
         metrics.register(self)
     }
 
@@ -141,7 +143,7 @@ impl<EC: EvaluatorComponentTypes> EvaluatorBuilder<EC> {
 
     /// Builds the evaluator.
     #[allow(clippy::type_complexity)]
-    pub fn build(mut self, model: EC::Model) -> Evaluator<EC> {
+    pub fn build(mut self, model: EC::Model) -> Evaluator<EC, L> {
         let renderer = self
             .renderer
             .unwrap_or_else(|| default_renderer(self.interrupter.clone(), None));
@@ -166,7 +168,7 @@ impl<EC: EvaluatorComponentTypes> EvaluatorBuilder<EC> {
             None
         };
 
-        Evaluator {
+        Evaluator::<EC, L> {
             model,
             interrupter: self.interrupter,
             event_processor,
@@ -176,20 +178,20 @@ impl<EC: EvaluatorComponentTypes> EvaluatorBuilder<EC> {
 }
 
 /// Trait to fake variadic generics.
-pub trait EvalMetricRegistration<EC: EvaluatorComponentTypes>: Sized {
+pub trait EvalMetricRegistration<EC: EvaluatorComponentTypes, L: Label>: Sized {
     /// Register the metrics.
-    fn register(self, builder: EvaluatorBuilder<EC>) -> EvaluatorBuilder<EC>;
+    fn register(self, builder: EvaluatorBuilder<EC, L>) -> EvaluatorBuilder<EC, L>;
 }
 
 /// Trait to fake variadic generics.
-pub trait EvalTextMetricRegistration<EC: EvaluatorComponentTypes>: Sized {
+pub trait EvalTextMetricRegistration<EC: EvaluatorComponentTypes, L: Label>: Sized {
     /// Register the metrics.
-    fn register(self, builder: EvaluatorBuilder<EC>) -> EvaluatorBuilder<EC>;
+    fn register(self, builder: EvaluatorBuilder<EC, L>) -> EvaluatorBuilder<EC, L>;
 }
 
 macro_rules! gen_tuple {
     ($($M:ident),*) => {
-        impl<$($M,)* EC: EvaluatorComponentTypes> EvalTextMetricRegistration<EC> for ($($M,)*)
+        impl<$($M,)* EC: EvaluatorComponentTypes, L: Label> EvalTextMetricRegistration<EC, L> for ($($M,)*)
         where
             $(TestOutput<EC>: Adaptor<$M::Input>,)*
             $($M: Metric + 'static,)*
@@ -197,15 +199,16 @@ macro_rules! gen_tuple {
             #[allow(non_snake_case)]
             fn register(
                 self,
-                builder: EvaluatorBuilder<EC>,
-            ) -> EvaluatorBuilder<EC> {
+                builder: EvaluatorBuilder<EC, L>,
+            ) -> EvaluatorBuilder<EC, L> {
                 let ($($M,)*) = self;
-                $(let builder = builder.metric($M);)*
+                $(let builder = Labeled::<_, L>::new(builder.metric($M));)*
                 builder
             }
         }
 
-        impl<$($M,)* EC: EvaluatorComponentTypes> EvalMetricRegistration<EC> for ($($M,)*)
+
+        impl<$($M,)* EC: EvaluatorComponentTypes, L: Label> EvalMetricRegistration<EC, L> for ($($M,)*)
         where
             $(TestOutput<EC>: Adaptor<$M::Input>,)*
             $($M: Metric + $crate::metric::Numeric + 'static,)*
@@ -213,10 +216,10 @@ macro_rules! gen_tuple {
             #[allow(non_snake_case)]
             fn register(
                 self,
-                builder: EvaluatorBuilder<EC>,
-            ) -> EvaluatorBuilder<EC> {
+                builder: EvaluatorBuilder<EC, L>,
+            ) -> EvaluatorBuilder<EC, L> {
                 let ($($M,)*) = self;
-                $(let builder = builder.metric_numeric($M);)*
+                $(let builder = Labeled::<_, L>::new(builder.metric_numeric($M));)*
                 builder
             }
         }

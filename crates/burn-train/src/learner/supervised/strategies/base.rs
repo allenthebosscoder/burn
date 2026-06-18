@@ -11,9 +11,10 @@ use crate::{
 use burn_core::tensor::distributed::{DistributedConfig, DistributedContext};
 use burn_core::{module::AutodiffModule, prelude::Device};
 use std::sync::Arc;
+use typing_rules::*; // import filament ifc
 
 /// A reference to an implementation of SupervisedLearningStrategy.
-pub type CustomLearningStrategy<LC> = Arc<dyn SupervisedLearningStrategy<LC>>;
+pub type CustomLearningStrategy<LC, L: Label> = Arc<dyn SupervisedLearningStrategy<LC, L>>;
 
 #[derive(Clone, Copy, Debug)]
 /// Determine how the optimization is performed when training with multiple devices.
@@ -74,20 +75,20 @@ impl ExecutionStrategy {
 }
 
 /// How should the learner run the learning for the model
-pub enum TrainingStrategy<LC: LearningComponentsTypes> {
+pub enum TrainingStrategy<LC: LearningComponentsTypes, L: Label> {
     /// Default training loop with specified device strategy.
     Default(ExecutionStrategy),
     /// Training using a custom learning strategy
-    Custom(CustomLearningStrategy<LC>),
+    Custom(CustomLearningStrategy<LC, L>),
 }
 
-impl<LC: LearningComponentsTypes> From<ExecutionStrategy> for TrainingStrategy<LC> {
+impl<LC: LearningComponentsTypes, L: Label> From<ExecutionStrategy> for TrainingStrategy<LC, L> {
     fn from(value: ExecutionStrategy) -> Self {
         Self::Default(value)
     }
 }
 
-impl<LC: LearningComponentsTypes> Default for TrainingStrategy<LC> {
+impl<LC: LearningComponentsTypes, L: Label> Default for TrainingStrategy<LC, L> {
     fn default() -> Self {
         Self::Default(ExecutionStrategy::SingleDevice(Default::default()))
     }
@@ -117,13 +118,13 @@ pub struct TrainingComponents<LC: LearningComponentsTypes> {
 }
 
 /// Provides the `fit` function for any learning strategy
-pub trait SupervisedLearningStrategy<LC: LearningComponentsTypes> {
+pub trait SupervisedLearningStrategy<LC: LearningComponentsTypes, L: Label> {
     /// Train the learner's model with this strategy.
     fn train(
         &self,
         mut learner: Learner<LC>,
-        dataloader_train: TrainLoader<LC>,
-        dataloader_valid: ValidLoader<LC>,
+        dataloader_train: TrainLoader<LC, L>,
+        dataloader_valid: ValidLoader<LC, L>,
         mut training_components: TrainingComponents<LC>,
     ) -> LearningResult<InferenceModel<LC>> {
         let starting_epoch = match training_components.checkpoint {
@@ -175,8 +176,8 @@ pub trait SupervisedLearningStrategy<LC: LearningComponentsTypes> {
         &self,
         training_components: TrainingComponents<LC>,
         learner: Learner<LC>,
-        dataloader_train: TrainLoader<LC>,
-        dataloader_valid: ValidLoader<LC>,
+        dataloader_train: TrainLoader<LC, L>,
+        dataloader_valid: ValidLoader<LC, L>,
         starting_epoch: usize,
     ) -> (TrainingModel<LC>, SupervisedTrainingEventProcessor<LC>);
 }

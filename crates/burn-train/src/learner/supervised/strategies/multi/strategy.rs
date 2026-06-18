@@ -6,6 +6,7 @@ use crate::{
     single::{TrainingLoop, epoch::SingleDeviceValidEpoch},
 };
 use burn_core::{data::dataloader::split::split_dataloader, tensor::Device};
+use typing_rules::*; // import filament ifc
 
 pub struct MultiDeviceLearningStrategy {
     devices: Vec<Device>,
@@ -17,13 +18,13 @@ impl MultiDeviceLearningStrategy {
     }
 }
 
-impl<LC: LearningComponentsTypes> SupervisedLearningStrategy<LC> for MultiDeviceLearningStrategy {
+impl<LC: LearningComponentsTypes, L: Label> SupervisedLearningStrategy<LC, L> for MultiDeviceLearningStrategy {
     fn fit(
         &self,
         training_components: TrainingComponents<LC>,
         mut learner: Learner<LC>,
-        dataloader_train: TrainLoader<LC>,
-        dataloader_valid: ValidLoader<LC>,
+        dataloader_train: TrainLoader<LC, L>,
+        dataloader_valid: ValidLoader<LC, L>,
         starting_epoch: usize,
     ) -> (TrainingModel<LC>, SupervisedTrainingEventProcessor<LC>) {
         let main_device = self.devices.first().unwrap();
@@ -41,11 +42,11 @@ impl<LC: LearningComponentsTypes> SupervisedLearningStrategy<LC> for MultiDevice
         let mut checkpointer = training_components.checkpointer;
         let mut early_stopping = training_components.early_stopping;
 
-        let epoch_train = MultiDeviceTrainEpoch::<LC>::new(
+        let epoch_train = MultiDeviceTrainEpoch::<LC, L>::new(
             dataloader_train.clone(),
             training_components.grad_accumulation,
         );
-        let epoch_valid: SingleDeviceValidEpoch<LC> =
+        let epoch_valid: SingleDeviceValidEpoch<LC, L> =
             SingleDeviceValidEpoch::new(dataloader_valid.clone());
 
         for training_progress in TrainingLoop::new(starting_epoch, training_components.num_epochs) {

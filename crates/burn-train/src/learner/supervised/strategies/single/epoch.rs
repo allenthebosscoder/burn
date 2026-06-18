@@ -7,21 +7,22 @@ use crate::{
 use burn_core::data::dataloader::Progress;
 use burn_core::module::AutodiffModule;
 use burn_optim::GradientsAccumulator;
+use typing_rules::*; // import filament ifc
 
 /// A validation epoch.
 #[derive(new)]
-pub struct SingleDeviceValidEpoch<LC: LearningComponentsTypes> {
-    dataloader: ValidLoader<LC>,
+pub struct SingleDeviceValidEpoch<LC: LearningComponentsTypes, L: Label> {
+    dataloader: ValidLoader<LC, L>,
 }
 
 /// A training epoch.
 #[derive(new)]
-pub struct SingleDeviceTrainEpoch<LC: LearningComponentsTypes> {
-    dataloader: TrainLoader<LC>,
+pub struct SingleDeviceTrainEpoch<LC: LearningComponentsTypes, L: Label> {
+    dataloader: TrainLoader<LC, L>,
     grad_accumulation: Option<usize>,
 }
 
-impl<LC: LearningComponentsTypes> SingleDeviceValidEpoch<LC> {
+impl<LC: LearningComponentsTypes, L: Label> SingleDeviceValidEpoch<LC, L> {
     /// Runs the validation epoch.
     ///
     /// # Arguments
@@ -58,7 +59,7 @@ impl<LC: LearningComponentsTypes> SingleDeviceValidEpoch<LC> {
     }
 }
 
-impl<LC: LearningComponentsTypes> SingleDeviceTrainEpoch<LC> {
+impl<LC: LearningComponentsTypes, L: Label> SingleDeviceTrainEpoch<LC, L> {
     /// Runs the training epoch.
     ///
     /// # Arguments

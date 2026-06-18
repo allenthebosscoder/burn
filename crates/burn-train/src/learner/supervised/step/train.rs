@@ -6,10 +6,12 @@ use burn_core::module::Module;
 use burn_core::tensor::Device;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::spawn;
+use typing_rules::*; // import filament ifc
+use macros::{fcall, mcall}; // import ifc macros
 
 /// Multi devices train step.
-pub struct MultiDevicesTrainStep<LC: LearningComponentsTypes> {
-    workers: Vec<Worker<LC>>,
+pub struct MultiDevicesTrainStep<LC: LearningComponentsTypes, L: Label> {
+    workers: Vec<Worker<LC, L>>,
     receiver: Receiver<MultiTrainOutput<TrainingModelOutput<LC>>>,
 }
 
@@ -18,16 +20,16 @@ struct Message<M, TI> {
     model: M,
 }
 
-struct Worker<LC: LearningComponentsTypes> {
+struct Worker<LC: LearningComponentsTypes, L: Label> {
     // Not that complex. Extracting into another type would only make it more confusing.
     // #[allow(clippy::type_complexity)]
-    sender_input: Sender<Message<TrainingModel<LC>, TrainingModelInput<LC>>>,
+    sender_input: Sender<Message<TrainingModel<LC>, Labeled<TrainingModelInput<LC>, L>>>,
     device: Device,
     device_id: usize,
 }
 
-impl<LC: LearningComponentsTypes> Worker<LC> {
-    fn register(&self, item: TrainingModelInput<LC>, model: &TrainingModel<LC>) {
+impl<LC: LearningComponentsTypes, L: Label> Worker<LC, L> {
+    fn register(&self, item: Labeled<TrainingModelInput<LC>, L>, model: &TrainingModel<LC>) {
         let message = Message {
             item,
             model: model.clone(),
@@ -40,7 +42,7 @@ impl<LC: LearningComponentsTypes> Worker<LC> {
     fn start(
         &self,
         sender_output: Sender<MultiTrainOutput<TrainingModelOutput<LC>>>,
-        receiver_input: Receiver<Message<TrainingModel<LC>, TrainingModelInput<LC>>>,
+        receiver_input: Receiver<Message<TrainingModel<LC>, Labeled<TrainingModelInput<LC>, L>>>,
     ) {
         let device = self.device.clone();
         let device_id = self.device_id;
@@ -50,7 +52,18 @@ impl<LC: LearningComponentsTypes> Worker<LC> {
                 match receiver_input.recv() {
                     Ok(item) => {
                         let model = item.model.fork(&device);
-                        let output = model.step(item.item);
+                        
+                        let output = (model).__chain_ref(|__v0| {
+                            (item.item).__chain(|__v1| {
+
+                                let _: TrainingModelInput<LC> = __v1;
+
+                                Labeled::<_, Public>::new(
+                                    TrainStep::step(__v0, __v1)
+                                )
+                            })
+                        });
+                        //let output = model.step(item.item);
                         let item = MultiTrainOutput { output, device_id };
 
                         sender_output.send(item).unwrap();
@@ -73,7 +86,7 @@ pub struct MultiTrainOutput<TO> {
     pub(crate) device_id: usize,
 }
 
-impl<LC: LearningComponentsTypes> MultiDevicesTrainStep<LC> {
+impl<LC: LearningComponentsTypes, L: Label> MultiDevicesTrainStep<LC, L> {
     /// Create a new multi devices train step.
     ///
     /// # Arguments
@@ -119,7 +132,7 @@ impl<LC: LearningComponentsTypes> MultiDevicesTrainStep<LC> {
     /// Outputs.
     pub fn step<'a>(
         &self,
-        dataloaders: &mut [Box<dyn DataLoaderIterator<TrainingModelInput<LC>> + 'a>],
+        dataloaders: &mut [Box<dyn DataLoaderIterator<TrainingModelInput<LC>, L> + 'a>],
         model: &TrainingModel<LC>,
     ) -> (Vec<MultiTrainOutput<TrainingModelOutput<LC>>>, Progress) {
         let mut num_send = 0;
