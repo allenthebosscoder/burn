@@ -397,9 +397,22 @@ pub fn mcall(input: TokenStream) -> TokenStream {
         }
 
         // --- method call: mcall!(obj.method(args)) or mcall!(obj.m1().m2().m3(args)) ---
-        // Recursively peels the chain to find the root labeled receiver,
-        // then rebuilds the full chain as the closure body.
-        // e.g. mcall!(key.chars().all(f)) → __mcall_preserve_label(&key, |inner| inner.chars().all(f))
+        //
+        // Handles two cases via the same expansion:
+        //   1. Labeled receiver, unlabeled args:
+        //      e.g. mcall!(key.chars().all(f))
+        //      → (key).__chain_ref(|__recv| (f).__chain(|__av0| Labeled::new(__recv.chars().all(__av0))))
+        //      Inherent __chain_ref on Labeled<T,L> gives &T and preserves label L.
+        //
+        //   2. Unlabeled receiver, labeled args (the train.rs case):
+        //      e.g. mcall!(model.step(item.item))  where model: TrainingModel<LC>, item.item: Labeled<_, L>
+        //      → (model).__chain_ref(|__recv| (item.item).__chain(|__av0| Labeled::new(__recv.step(__av0))))
+        //      SecureChainRef blanket impl handles the raw receiver (treats it as Public),
+        //      while the inherent __chain on the labeled arg propagates its label L.
+        //
+        // The base receiver is always accessed via __chain_ref (borrow, not move).
+        // The last method's args are each chained individually; intermediate method
+        // args (in a chained call) are passed raw (assumed non-labeled).
         Expr::MethodCall(mc) => {
             fn peel(
                 expr: &Expr,
@@ -417,17 +430,64 @@ pub fn mcall(input: TokenStream) -> TokenStream {
             }
             let mc_expr = Expr::MethodCall(mc);
             let (base, chain) = peel(&mc_expr);
-            let closure_body = chain.iter().fold(quote! { inner }, |acc, (method, turbofish, args)| {
+
+            // Split the last method from the chain so we can chain its args individually.
+            // Intermediate methods (all but last) have their args passed raw.
+            let (last_entry, intermediates) = chain.split_last()
+                .expect("mcall!: method call must have at least one method");
+            let (last_method, last_tf, last_args) = last_entry;
+
+            // Build the receiver expression after applying any intermediate methods.
+            // For a simple single-method call this is just `__recv`.
+            let intermediate_recv = intermediates.iter().fold(quote! { __recv }, |acc, (method, turbofish, args)| {
                 if let Some(tf) = turbofish {
                     quote! { #acc.#method::<#tf>(#args) }
                 } else {
                     quote! { #acc.#method(#args) }
                 }
             });
+
+            // Generate names for the last method's unwrapped args.
+            let arg_count = last_args.len();
+            let arg_names: Vec<_> = (0..arg_count).map(|i| format_ident!("__av{}", i)).collect();
+
+            // Innermost expression: call the last method and wrap result in Labeled<_, Public>.
+            // The label joins with whatever labels are contributed by the receiver and arg chains.
+            let inner_call = if let Some(tf) = last_tf {
+                quote! {
+                    ::typing_rules::lattice::Labeled::<_, ::typing_rules::lattice::Public>::new(
+                        (#intermediate_recv).#last_method::<#tf>(#(#arg_names),*)
+                    )
+                }
+            } else {
+                quote! {
+                    ::typing_rules::lattice::Labeled::<_, ::typing_rules::lattice::Public>::new(
+                        (#intermediate_recv).#last_method(#(#arg_names),*)
+                    )
+                }
+            };
+
+            // Build arg chains from the inside out (last arg wraps innermost).
+            let mut body = inner_call;
+            for (arg, name) in last_args.iter().zip(arg_names.iter()).rev() {
+                body = quote! { (#arg).__chain(|#name| { #body }) };
+            }
+
+            // Chain the base receiver via __chain_ref (called on the value, not a reference):
+            //   - Labeled<T, L>: inherent __chain_ref is found first; auto-refs to &Labeled<T,L>,
+            //     closure receives &T, label L propagates via Join
+            //   - Raw T: SecureChainRef blanket impl (T: Sized); auto-refs to &T,
+            //     closure receives &T, contributes Public label
+            // Using `(#base)` (not `(&(#base))`) ensures the blanket impl resolves
+            // to T = TrainingModel<LC> (giving __recv: &T), not T = &TrainingModel<LC>
+            // (which would give __recv: &&T via double-ref).
             quote! {
                 {
-                    #helper
-                    __mcall_preserve_label(&(#base), |inner| #closure_body)
+                    use ::typing_rules::function_rewrite::SecureChain;
+                    use ::typing_rules::function_rewrite::SecureChainRef;
+                    (#base).__chain_ref(|__recv| {
+                        #body
+                    })
                 }
             }
         }

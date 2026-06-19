@@ -12,7 +12,7 @@ use macros::{fcall, mcall}; // import ifc macros
 /// Multi devices train step.
 pub struct MultiDevicesTrainStep<LC: LearningComponentsTypes, L: Label> {
     workers: Vec<Worker<LC, L>>,
-    receiver: Receiver<MultiTrainOutput<TrainingModelOutput<LC>>>,
+    receiver: Receiver<MultiTrainOutput<TrainingModelOutput<LC>, L>>,
 }
 
 struct Message<M, TI> {
@@ -41,7 +41,7 @@ impl<LC: LearningComponentsTypes, L: Label> Worker<LC, L> {
     // #[allow(clippy::type_complexity)]
     fn start(
         &self,
-        sender_output: Sender<MultiTrainOutput<TrainingModelOutput<LC>>>,
+        sender_output: Sender<MultiTrainOutput<TrainingModelOutput<LC>, L>>,
         receiver_input: Receiver<Message<TrainingModel<LC>, Labeled<TrainingModelInput<LC>, L>>>,
     ) {
         let device = self.device.clone();
@@ -52,10 +52,9 @@ impl<LC: LearningComponentsTypes, L: Label> Worker<LC, L> {
                 match receiver_input.recv() {
                     Ok(item) => {
                         let model = item.model.fork(&device);
-                        
-                        
-                        let output = fcall!(TrainStep::step(&model, item.item));
-                        //let output = model.step(item.item);
+                        let input = item.item;
+                        // let output = fcall!(TrainStep::step(&model, input));
+                        let output: Labeled<_, _> = mcall!(model.step(input));
                         let item = MultiTrainOutput { output, device_id };
 
                         sender_output.send(item).unwrap();
@@ -71,9 +70,9 @@ impl<LC: LearningComponentsTypes, L: Label> Worker<LC, L> {
 }
 
 /// Multiple output items.
-pub struct MultiTrainOutput<TO> {
-    /// The training output.
-    pub output: TrainOutput<TO>,
+pub struct MultiTrainOutput<TO, L: Label> {
+    /// The training output (labeled with the input's security label).
+    pub output: Labeled<TrainOutput<TO>, L>,
     /// The worker/device on which the computing happened.
     pub(crate) device_id: usize,
 }
@@ -126,7 +125,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDevicesTrainStep<LC, L> {
         &self,
         dataloaders: &mut [Box<dyn DataLoaderIterator<TrainingModelInput<LC>, L> + 'a>],
         model: &TrainingModel<LC>,
-    ) -> (Vec<MultiTrainOutput<TrainingModelOutput<LC>>>, Progress) {
+    ) -> (Vec<MultiTrainOutput<TrainingModelOutput<LC>, L>>, Progress) {
         let mut num_send = 0;
 
         let mut items_total = 0;

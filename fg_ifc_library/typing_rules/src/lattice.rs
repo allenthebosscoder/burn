@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 
 // LABEL TRAITS
 // The core security labels used to tag data and execution contexts.
-pub trait Label: Clone + Copy + Default + Send + Sync + 'static {}
+// The supertrait Join<Public, Out = Self> encodes the law that joining any label
+// with Public (the bottom element) returns the label unchanged. This lets the
+// type-checker resolve <L as Join<Public>>::Out = L for any generic L: Label,
+// which is required by __chain when a labeled arg is passed to an unlabeled receiver.
+pub trait Label: Clone + Copy + Default + Send + Sync + Join<Public, Out = Self> + 'static {}
 
 #[derive(Clone, Copy, Default)]
 pub struct Public;
@@ -25,7 +29,7 @@ impl Label for AB {}
 // JOIN OPERATION
 // This trait calculates the Least Upper Bound (LUB) of two labels.
 // It answers: "If I combine data from L1 and L2, what is the new security level?"
-pub trait Join<Other: Label>: Label {
+pub trait Join<Other: Label> {
     type Out: Label;
 }
 
