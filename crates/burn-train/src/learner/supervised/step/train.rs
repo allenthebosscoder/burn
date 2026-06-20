@@ -7,7 +7,7 @@ use burn_core::tensor::Device;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::spawn;
 use typing_rules::*; // import filament ifc
-use macros::{fcall, mcall}; // import ifc macros
+use macros::mcall; // import ifc macros
 
 /// Multi devices train step.
 pub struct MultiDevicesTrainStep<LC: LearningComponentsTypes, L: Label> {

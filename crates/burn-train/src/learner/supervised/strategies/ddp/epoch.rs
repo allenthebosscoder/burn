@@ -3,7 +3,7 @@ use burn_core::module::AutodiffModule;
 use burn_optim::GradientsAccumulator;
 use std::sync::{Arc, Mutex};
 use typing_rules::*; // import filament ifc
-use macros::{fcall, mcall}; // import ifc macros
+use macros::fcall; // import ifc macros
 
 use crate::SupervisedTrainingEventProcessor;
 use crate::learner::base::Interrupter;
@@ -48,19 +48,8 @@ impl<LC: LearningComponentsTypes, L: Label> DdpValidEpoch<LC, L> {
             let progress = iterator.progress();
             iteration += 1;
 
-            let item = (learner).__chain_ref(|__v0| {
-                (item).__chain(|__v1| {
-
-                    let _: TrainingModelInput<LC> = __v1;
-
-                    Labeled::<_, Public>::new(
-                        Learner::train_step(__v0, __v1)
-                    )
-                })
-            });
-            // let item = fcall!(InferenceStep::step(&model, item));
-            //let item = model.step(item);
-            let item = TrainingItem::new(item, progress, Some(iteration), None);
+            let item = fcall!(InferenceStep::step(&model, item));
+            let item = TrainingItem::new(item.__private_into_value(), progress, Some(iteration), None);
 
             processor.process_valid(LearnerEvent::ProcessedItem(item));
 
@@ -112,9 +101,9 @@ impl<LC: LearningComponentsTypes, L: Label> DdpTrainEpoch<LC, L> {
             progress.items_processed *= peer_count;
             progress.items_total *= peer_count;
 
-            
             //let item = learner.train_step(item);
             let item = fcall!(Learner::train_step(&learner, item));
+            let item = item.__private_into_value();
 
             match self.grad_accumulation {
                 Some(accumulation) => {

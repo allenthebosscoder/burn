@@ -100,9 +100,10 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
 
             let mut progress_items = Vec::with_capacity(items.len());
             for item in items.into_iter() {
-                let grads = item.output.grads.to_device(&device_main, &learner.model());
+                let raw_output = item.output.__private_into_value();
+                let grads = raw_output.grads.to_device(&device_main, &learner.model());
                 accumulator.accumulate(&learner.model(), grads);
-                progress_items.push(item.output.item);
+                progress_items.push(raw_output.item);
             }
 
             accumulation_current += 1;
@@ -171,8 +172,9 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
             let mut progress_items = Vec::with_capacity(items.len());
             for item in items.into_iter() {
                 let accumulator = &mut accumulators[item.device_id];
-                accumulator.accumulate(&learner.model(), item.output.grads);
-                progress_items.push(item.output.item);
+                let raw_output = item.output.__private_into_value();
+                accumulator.accumulate(&learner.model(), raw_output.grads);
+                progress_items.push(raw_output.item);
             }
 
             accumulation_current += 1;
