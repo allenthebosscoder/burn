@@ -24,9 +24,7 @@ use crate::{
 use crate::{Learner, SupervisedLearningStrategy};
 use burn_core::data::dataloader::DataLoader;
 use burn_core::module::{AutodiffModule, Module};
-use burn_core::record::FileRecorder;
 use burn_core::tensor::Device;
-use burn_optim::Optimizer;
 use burn_optim::lr_scheduler::LrScheduler;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -52,9 +50,9 @@ where
     // Not that complex. Extracting into another type would only make it more confusing.
     #[allow(clippy::type_complexity)]
     checkpointers: Option<(
-        AsyncCheckpointer<LearnerModelRecord<LC>>,
-        AsyncCheckpointer<LearnerOptimizerRecord<LC>>,
-        AsyncCheckpointer<LearnerSchedulerRecord<LC>>,
+        AsyncCheckpointer<LearnerModelRecord>,
+        AsyncCheckpointer<LearnerOptimizerRecord>,
+        AsyncCheckpointer<LearnerSchedulerRecord>,
     )>,
     num_epochs: usize,
     checkpoint: Option<usize>,
@@ -318,19 +316,13 @@ impl<LC: LearningComponentsTypes, L: Label> SupervisedTraining<LC, L> {
         self
     }
 
-    /// Register a checkpointer that will save the [optimizer](Optimizer), the
-    /// [model](AutodiffModule) and the [scheduler](LrScheduler) to different files.
-    pub fn with_file_checkpointer<FR>(mut self, recorder: FR) -> Self
-    where
-        FR: FileRecorder + 'static,
-        FR: FileRecorder + 'static,
-    {
+    /// Register a checkpointer that will save the [optimizer](burn_optim::ModuleOptimizer), the
+    /// [model](AutodiffModule) and the [scheduler](LrScheduler) to separate burnpack files.
+    pub fn with_checkpointer(mut self) -> Self {
         let checkpoint_dir = self.directory.join("checkpoint");
-        let checkpointer_model = FileCheckpointer::new(recorder.clone(), &checkpoint_dir, "model");
-        let checkpointer_optimizer =
-            FileCheckpointer::new(recorder.clone(), &checkpoint_dir, "optim");
-        let checkpointer_scheduler: FileCheckpointer<FR> =
-            FileCheckpointer::new(recorder, &checkpoint_dir, "scheduler");
+        let checkpointer_model = FileCheckpointer::new(&checkpoint_dir, "model");
+        let checkpointer_optimizer = FileCheckpointer::new(&checkpoint_dir, "optim");
+        let checkpointer_scheduler = FileCheckpointer::new(&checkpoint_dir, "scheduler");
 
         self.checkpointers = Some((
             AsyncCheckpointer::new(checkpointer_model),
@@ -417,6 +409,13 @@ where
                 self.grad_checkpointing,
             )),
         ));
+
+        let mut learner = learner;
+        if let Some(checkpoint) = components.checkpoint
+            && let Some(checkpointer) = &components.checkpointer
+        {
+            learner = checkpointer.load_checkpoint(learner, checkpoint);
+        }
 
         match training_strategy {
             TrainingStrategy::Custom(learning_paradigm) => learning_paradigm.train(

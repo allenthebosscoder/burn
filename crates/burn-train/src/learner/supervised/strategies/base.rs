@@ -127,17 +127,7 @@ pub trait SupervisedLearningStrategy<LC: LearningComponentsTypes, L: Label> {
         dataloader_valid: ValidLoader<LC, L>,
         mut training_components: TrainingComponents<LC>,
     ) -> LearningResult<InferenceModel<LC>> {
-        let starting_epoch = match training_components.checkpoint {
-            Some(checkpoint) => {
-                if let Some(checkpointer) = &mut training_components.checkpointer {
-                    learner =
-                        checkpointer.load_checkpoint(learner, &Default::default(), checkpoint);
-                }
-                checkpoint + 1
-            }
-            None => 1,
-        };
-
+        let starting_epoch = training_components.checkpoint.unwrap_or(0) + 1;
         let summary_config = training_components.summary.clone();
 
         // Event processor start training
