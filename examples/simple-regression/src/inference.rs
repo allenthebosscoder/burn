@@ -6,6 +6,7 @@ use burn::{
 };
 use rgb::RGB8;
 use textplots::{Chart, ColorPlot, Shape};
+use typing_rules::*; // import filament ifc
 
 use crate::{
     dataset::{HousingBatcher, HousingDataset, HousingDistrictItem},
@@ -22,11 +23,11 @@ pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
         .load_record(record);
 
     // Use a sample of 1000 items from the test split
-    let dataset = HousingDataset::test();
-    let items: Vec<HousingDistrictItem> = dataset.iter().take(1000).collect();
+    let dataset = HousingDataset::<Secret>::test();
+    let items: Vec<Labeled<HousingDistrictItem, Secret>> = dataset.iter().take(1000).collect();
 
     let batcher = HousingBatcher::new(&device);
-    let batch = batcher.batch(items.clone(), &device);
+    let batch = declassify(batcher.batch(items.clone(), &device));
     let predicted = model.forward(batch.inputs);
     let targets = batch.targets;
 

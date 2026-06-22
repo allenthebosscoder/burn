@@ -7,6 +7,7 @@ use burn::{
     prelude::*,
     train::metric::LossMetric,
 };
+use typing_rules::*; // import filament ifc
 
 #[derive(Config, Debug)]
 pub struct ExpConfig {
@@ -45,8 +46,8 @@ pub fn run(artifact_dir: &str, device: impl Into<Device>) {
     let model = RegressionModelConfig::new().init(&autodiff_device);
 
     // Define train/valid datasets and dataloaders
-    let train_dataset = HousingDataset::train();
-    let valid_dataset = HousingDataset::validation();
+    let train_dataset = HousingDataset::<Secret>::train();
+    let valid_dataset = HousingDataset::<Secret>::validation();
 
     println!("Train Dataset Size: {}", train_dataset.len());
     println!("Valid Dataset Size: {}", valid_dataset.len());

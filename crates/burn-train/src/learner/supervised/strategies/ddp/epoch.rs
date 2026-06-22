@@ -49,9 +49,8 @@ impl<LC: LearningComponentsTypes, L: Label> DdpValidEpoch<LC, L> {
             iteration += 1;
 
             let item = fcall!(InferenceStep::step(&model, item));
-            let item = TrainingItem::new(item.__private_into_value(), progress, Some(iteration), None);
-
-            processor.process_valid(LearnerEvent::ProcessedItem(item));
+            let labeled_event = item.map(|o| LearnerEvent::ProcessedItem(TrainingItem::new(o, progress, Some(iteration), None)));
+            fcall!(EventProcessorTraining::process_valid(processor, labeled_event));
 
             if interrupter.should_stop() {
                 log::info!("Training interrupted.");
@@ -103,11 +102,11 @@ impl<LC: LearningComponentsTypes, L: Label> DdpTrainEpoch<LC, L> {
 
             //let item = learner.train_step(item);
             let item = fcall!(Learner::train_step(&learner, item));
-            let item = item.__private_into_value();
+            let (labeled_grads, labeled_item) = item.map(|o| (o.grads, o.item)).split();
 
             match self.grad_accumulation {
                 Some(accumulation) => {
-                    accumulator.accumulate(&learner.model(), item.grads);
+                    fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
                     accumulation_current += 1;
 
                     if accumulation <= accumulation_current {
@@ -118,20 +117,17 @@ impl<LC: LearningComponentsTypes, L: Label> DdpTrainEpoch<LC, L> {
                     }
                 }
                 None => {
-                    learner.optimizer_step(item.grads);
+                    fcall!(Learner::optimizer_step(&mut *learner, labeled_grads));
                 }
             }
 
-            let item = TrainingItem::new(
-                item.item,
-                progress,
-                Some(iteration),
-                Some(learner.lr_current()),
-            );
+            let labeled_event = labeled_item
+                .map(|o| TrainingItem::new(o, progress, Some(iteration), Some(learner.lr_current())))
+                .map(LearnerEvent::ProcessedItem);
 
             {
                 let mut processor = processor.lock().unwrap();
-                processor.process_train(LearnerEvent::ProcessedItem(item));
+                fcall!(EventProcessorTraining::process_train(&mut *processor, labeled_event));
             }
 
             if interrupter.should_stop() {

@@ -32,6 +32,7 @@ pub struct EvaluatorBuilder<EC: EvaluatorComponentTypes, L: Label> {
     directory: PathBuf,
     summary: bool,
     progress_logger: Option<Box<dyn EvaluationProgressLogger>>,
+    _label: std::marker::PhantomData<L>,
 }
 
 impl<M, L> EvaluatorBuilder<EvaluatorComponentTypesMarker<M>, L>
@@ -58,6 +59,7 @@ where
             metrics: MetricsEvaluation::default(),
             directory,
             progress_logger: None,
+            _label: std::marker::PhantomData,
         }
     }
 }
@@ -173,6 +175,7 @@ impl<EC: EvaluatorComponentTypes, L: Label> EvaluatorBuilder<EC, L> {
             interrupter: self.interrupter,
             event_processor,
             summary,
+            _label: std::marker::PhantomData,
         }
     }
 }
@@ -202,7 +205,7 @@ macro_rules! gen_tuple {
                 builder: EvaluatorBuilder<EC, L>,
             ) -> EvaluatorBuilder<EC, L> {
                 let ($($M,)*) = self;
-                $(let builder = Labeled::<_, L>::new(builder.metric($M));)*
+                $(let builder = builder.metric($M);)*
                 builder
             }
         }
@@ -219,7 +222,7 @@ macro_rules! gen_tuple {
                 builder: EvaluatorBuilder<EC, L>,
             ) -> EvaluatorBuilder<EC, L> {
                 let ($($M,)*) = self;
-                $(let builder = Labeled::<_, L>::new(builder.metric_numeric($M));)*
+                $(let builder = builder.metric_numeric($M);)*
                 builder
             }
         }

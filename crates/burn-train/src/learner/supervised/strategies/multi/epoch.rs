@@ -10,6 +10,7 @@ use burn_core::tensor::Device;
 use burn_optim::GradientsAccumulator;
 use burn_optim::MultiGradientsParams;
 use typing_rules::*; // import filament ifc
+use macros::fcall; // import ifc macros
 
 /// A training epoch.
 #[derive(new)]
@@ -100,10 +101,11 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
 
             let mut progress_items = Vec::with_capacity(items.len());
             for item in items.into_iter() {
-                let raw_output = item.output.__private_into_value();
-                let grads = raw_output.grads.to_device(&device_main, &learner.model());
-                accumulator.accumulate(&learner.model(), grads);
-                progress_items.push(raw_output.item);
+                let (labeled_grads, labeled_item) = item.output
+                    .map(|o| (o.grads.to_device(&device_main, &learner.model()), o.item))
+                    .split();
+                fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
+                fcall!(Vec::push(&mut progress_items, labeled_item));
             }
 
             accumulation_current += 1;
@@ -172,9 +174,9 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
             let mut progress_items = Vec::with_capacity(items.len());
             for item in items.into_iter() {
                 let accumulator = &mut accumulators[item.device_id];
-                let raw_output = item.output.__private_into_value();
-                accumulator.accumulate(&learner.model(), raw_output.grads);
-                progress_items.push(raw_output.item);
+                let (labeled_grads, labeled_item) = item.output.map(|o| (o.grads, o.item)).split();
+                fcall!(GradientsAccumulator::accumulate(accumulator, &learner.model(), labeled_grads));
+                fcall!(Vec::push(&mut progress_items, labeled_item));
             }
 
             accumulation_current += 1;

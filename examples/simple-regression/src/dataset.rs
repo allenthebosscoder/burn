@@ -55,11 +55,11 @@ pub struct HousingDistrictItem {
     pub median_house_value: f32,
 }
 
-pub struct HousingDataset {
-    dataset: SqliteDataset<HousingDistrictItem, L: Label>,
+pub struct HousingDataset<L: Label> {
+    dataset: SqliteDataset<HousingDistrictItem, L>,
 }
 
-impl Dataset<HousingDistrictItem, L: Label> for HousingDataset {
+impl<L: Label> Dataset<HousingDistrictItem, L> for HousingDataset<L> {
     fn get(&self, index: usize) -> Option<Labeled<HousingDistrictItem, L>> {
         self.dataset.get(index)
     }
@@ -69,7 +69,7 @@ impl Dataset<HousingDistrictItem, L: Label> for HousingDataset {
     }
 }
 
-impl HousingDataset {
+impl<L: Label> HousingDataset<L> {
     pub fn train() -> Self {
         Self::new("train")
     }
@@ -83,7 +83,7 @@ impl HousingDataset {
     }
 
     pub fn new(split: &str) -> Self {
-        let dataset: SqliteDataset<HousingDistrictItem> =
+        let dataset: SqliteDataset<HousingDistrictItem, L> =
             HuggingfaceDatasetLoader::new("gvlassis/california_housing")
                 .dataset(split)
                 .unwrap();
@@ -140,21 +140,22 @@ impl HousingBatcher {
     }
 }
 
-impl Batcher<HousingDistrictItem, HousingBatch> for HousingBatcher {
-    fn batch(&self, items: Vec<HousingDistrictItem>, device: &Device) -> HousingBatch {
+impl<L: Label> Batcher<HousingDistrictItem, HousingBatch, L> for HousingBatcher {
+    fn batch(&self, items: Vec<Labeled<HousingDistrictItem, L>>, device: &Device) -> Labeled<HousingBatch, L> {
         let mut inputs: Vec<Tensor<2>> = Vec::new();
 
         for item in items.iter() {
+            let d = item.declassify_ref();
             let input_tensor = Tensor::<1>::from_floats(
                 [
-                    item.median_income,
-                    item.house_age,
-                    item.avg_rooms,
-                    item.avg_bedrooms,
-                    item.population,
-                    item.avg_occupancy,
-                    item.latitude,
-                    item.longitude,
+                    d.median_income,
+                    d.house_age,
+                    d.avg_rooms,
+                    d.avg_bedrooms,
+                    d.population,
+                    d.avg_occupancy,
+                    d.latitude,
+                    d.longitude,
                 ],
                 device,
             );
@@ -167,11 +168,11 @@ impl Batcher<HousingDistrictItem, HousingBatch> for HousingBatcher {
 
         let targets = items
             .iter()
-            .map(|item| Tensor::<1>::from_floats([item.median_house_value], device))
+            .map(|item| Tensor::<1>::from_floats([item.declassify_ref().median_house_value], device))
             .collect();
 
         let targets = Tensor::cat(targets, 0);
 
-        HousingBatch { inputs, targets }
+        Labeled::new(HousingBatch { inputs, targets })
     }
 }

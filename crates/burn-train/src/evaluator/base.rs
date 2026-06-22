@@ -6,6 +6,7 @@ use crate::{
     renderer::{EvaluationName, MetricsRenderer},
 };
 use burn_core::{data::dataloader::DataLoader, module::Module};
+use macros::fcall; // import ifc macros
 use std::sync::Arc;
 use typing_rules::*; // import filament ifc
 
@@ -22,6 +23,7 @@ pub struct Evaluator<EC: EvaluatorComponentTypes, L: Label> {
         AsyncProcessorEvaluation<FullEventProcessorEvaluation<TestOutput<EC>>>,
     /// Config for creating a summary of the evaluation
     pub summary: Option<LearnerSummaryConfig>,
+    pub(crate) _label: std::marker::PhantomData<L>,
 }
 
 impl<EC: EvaluatorComponentTypes, L: Label> Evaluator<EC, L> {
@@ -64,11 +66,9 @@ impl<EC: EvaluatorComponentTypes, L: Label> Evaluator<EC, L> {
                 let progress = iterator.progress();
                 iteration += 1;
 
-                let item = self.model.step(item);
-                let item = EvaluationItem::new(item, progress, Some(iteration));
-
-                self.event_processor
-                    .process_test(EvaluatorEvent::ProcessedItem(name.clone(), item));
+                let item = fcall!(InferenceStep::step(&self.model, item));
+                let labeled_event = item.map(|o| EvaluatorEvent::ProcessedItem(name.clone(), EvaluationItem::new(o, progress, Some(iteration))));
+                fcall!(EventProcessorEvaluation::process_test(&mut self.event_processor, labeled_event));
 
                 if self.interrupter.should_stop() {
                     log::info!("Testing interrupted.");

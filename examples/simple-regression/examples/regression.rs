@@ -53,6 +53,15 @@ mod tch_cpu {
 //     }
 // }
 
+#[cfg(feature = "ndarray")]
+mod ndarray {
+    use burn::tensor::Device;
+
+    pub fn run() {
+        super::run(Device::ndarray());
+    }
+}
+
 /// Train a regression model and predict results on a number of samples.
 pub fn run(device: Device) {
     training::run(ARTIFACT_DIR, device.clone());
@@ -68,6 +77,8 @@ fn main() {
     tch_cpu::run();
     #[cfg(feature = "wgpu")]
     wgpu::run();
+    #[cfg(feature = "ndarray")]
+    ndarray::run();
     #[cfg(feature = "remote")]
     remote::run();
 }

@@ -15,6 +15,8 @@ pub trait Label: Clone + Copy + Default + Send + Sync + Join<Public, Out = Self>
 #[derive(Clone, Copy, Default)]
 pub struct Public;
 #[derive(Clone, Copy, Default)]
+pub struct Secret; // Sensitive data — sits above Public, joins to AB with A or B
+#[derive(Clone, Copy, Default)]
 pub struct A;
 #[derive(Clone, Copy, Default)]
 pub struct B;
@@ -22,6 +24,7 @@ pub struct B;
 pub struct AB; // Represents the Join of A and B (Top Secret / Shared)
 
 impl Label for Public {}
+impl Label for Secret {}
 impl Label for A {}
 impl Label for B {}
 impl Label for AB {}
@@ -35,6 +38,14 @@ pub trait Join<Other: Label> {
 
 impl<L: Label> Join<L> for Public {
     type Out = L;
+}
+
+// Secret Joins
+impl Join<Public> for Secret {
+    type Out = Secret;
+}
+impl Join<Secret> for Secret {
+    type Out = Secret;
 }
 
 // A Joins (A + Public = A, A + B = AB)
@@ -86,6 +97,7 @@ pub trait FlowsTo<Target: Label>: Label {}
 
 impl<L: Label> FlowsTo<L> for L {}
 
+impl FlowsTo<Secret> for Public {} // Public flows to Secret
 impl FlowsTo<A> for Public {} // Public flows to A
 impl FlowsTo<B> for Public {} // Public flows to B
 impl FlowsTo<AB> for Public {} // Public flows to AB
@@ -199,6 +211,14 @@ impl<T, L: Label> Labeled<T, L> {
         Labeled::new(f(&self.value))
     }
 
+    /// Consume this labeled value, apply `f` to the inner value, and return a new labeled value
+    /// with the same label. Use this to access owned fields or apply consuming transforms without
+    /// stripping the label. Prefer `fcall!`/`mcall!` for calls; use `map` when you need to move
+    /// a field out of a labeled struct (e.g. to destructure into a tuple before `split()`).
+    pub fn map<R, F: FnOnce(T) -> R>(self, f: F) -> Labeled<R, L> {
+        Labeled::new(f(self.value))
+    }
+
     /// Declassify by reference — strips the label and returns &T.
     pub fn declassify_ref(&self) -> &T {
         &self.value
@@ -207,6 +227,16 @@ impl<T, L: Label> Labeled<T, L> {
     /// Declassify by mutable reference — strips the label and returns &mut T.
     pub fn declassify_ref_mut(&mut self) -> &mut T {
         &mut self.value
+    }
+}
+
+impl<A, B, L: Label> Labeled<(A, B), L> {
+    /// Split a labeled pair into two individually labeled values, preserving the label on both.
+    /// Used together with `map` to destructure a labeled struct into separately usable parts:
+    ///   `labeled.map(|o| (o.field_a, o.field_b)).split()`
+    pub fn split(self) -> (Labeled<A, L>, Labeled<B, L>) {
+        let (a, b) = self.value;
+        (Labeled::new(a), Labeled::new(b))
     }
 }
 

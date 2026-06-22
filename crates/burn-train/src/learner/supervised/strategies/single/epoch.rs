@@ -7,6 +7,7 @@ use crate::{
 use burn_core::data::dataloader::Progress;
 use burn_core::module::AutodiffModule;
 use burn_optim::GradientsAccumulator;
+use macros::fcall; // import ifc macros
 use typing_rules::*; // import filament ifc
 
 /// A validation epoch.
@@ -47,10 +48,9 @@ impl<LC: LearningComponentsTypes, L: Label> SingleDeviceValidEpoch<LC, L> {
             let progress = iterator.progress();
             iteration += 1;
 
-            let item = model.step(item);
-            let item = TrainingItem::new(item, progress, Some(iteration), None);
-
-            processor.process_valid(LearnerEvent::ProcessedItem(item));
+            let item = fcall!(InferenceStep::step(&model, item));
+            let labeled_event = item.map(|o| LearnerEvent::ProcessedItem(TrainingItem::new(o, progress, Some(iteration), None)));
+            fcall!(EventProcessorTraining::process_valid(processor, labeled_event));
 
             if interrupter.should_stop() {
                 break;
@@ -94,11 +94,12 @@ impl<LC: LearningComponentsTypes, L: Label> SingleDeviceTrainEpoch<LC, L> {
             log::info!("Iteration {iteration}");
 
             let progress = iterator.progress();
-            let item = learner.train_step(item);
+            let item = fcall!(Learner::train_step(&learner, item));
+            let (labeled_grads, labeled_item) = item.map(|o| (o.grads, o.item)).split();
 
             match self.grad_accumulation {
                 Some(accumulation) => {
-                    accumulator.accumulate(&learner.model(), item.grads);
+                    fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
                     accumulation_current += 1;
 
                     if accumulation <= accumulation_current {
@@ -108,17 +109,12 @@ impl<LC: LearningComponentsTypes, L: Label> SingleDeviceTrainEpoch<LC, L> {
                         accumulation_current = 0;
                     }
                 }
-                None => learner.optimizer_step(item.grads),
+                None => { fcall!(Learner::optimizer_step(&mut *learner, labeled_grads)); }
             }
 
-            let item = TrainingItem::new(
-                item.item,
-                progress,
-                Some(iteration),
-                Some(learner.lr_current()),
-            );
-
-            processor.process_train(LearnerEvent::ProcessedItem(item));
+            let labeled_event = labeled_item
+                .map(|o| LearnerEvent::ProcessedItem(TrainingItem::new(o, progress, Some(iteration), Some(learner.lr_current()))));
+            fcall!(EventProcessorTraining::process_train(processor, labeled_event));
 
             if interrupter.should_stop() {
                 break;

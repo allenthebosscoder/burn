@@ -75,11 +75,10 @@ where
     progress_logger: Option<Box<dyn TrainingProgressLogger>>,
 }
 
-impl<LR, M, O, L> SupervisedTraining<LearningComponentsMarker<LR, M, O>, L>
+impl<LR, M, L> SupervisedTraining<LearningComponentsMarker<LR, M>, L>
 where
     LR: LrScheduler + 'static,
     M: TrainStep + InferenceStep + AutodiffModule + core::fmt::Display + 'static,
-    O: Optimizer<M> + 'static,
     L: Label
 {
     /// Creates a new runner for a supervised training.
