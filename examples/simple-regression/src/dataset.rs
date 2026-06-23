@@ -6,6 +6,7 @@ use burn::{
     prelude::*,
 };
 
+use macros::fcall;
 use typing_rules::*; // import filament ifc
 
 pub const NUM_FEATURES: usize = 8;
@@ -138,41 +139,43 @@ impl HousingBatcher {
             normalizer: Normalizer::new(device, &FEATURES_MIN, &FEATURES_MAX),
         }
     }
+
+    fn item_to_tensors(&self, item: HousingDistrictItem, device: &Device) -> (Tensor<2>, Tensor<1>) {
+        let input = Tensor::<1>::from_floats(
+            [
+                item.median_income,
+                item.house_age,
+                item.avg_rooms,
+                item.avg_bedrooms,
+                item.population,
+                item.avg_occupancy,
+                item.latitude,
+                item.longitude,
+            ],
+            device,
+        )
+        .unsqueeze();
+        let target = Tensor::<1>::from_floats([item.median_house_value], device);
+        (input, target)
+    }
+
+    fn cat_pairs(&self, a: (Tensor<2>, Tensor<1>), b: (Tensor<2>, Tensor<1>)) -> (Tensor<2>, Tensor<1>) {
+        (Tensor::cat(vec![a.0, b.0], 0), Tensor::cat(vec![a.1, b.1], 0))
+    }
 }
 
-impl<L: Label> Batcher<HousingDistrictItem, HousingBatch, L> for HousingBatcher {
+impl<L: Label + Join<L, Out = L>> Batcher<HousingDistrictItem, HousingBatch, L> for HousingBatcher {
     fn batch(&self, items: Vec<Labeled<HousingDistrictItem, L>>, device: &Device) -> Labeled<HousingBatch, L> {
-        let mut inputs: Vec<Tensor<2>> = Vec::new();
+        let normalizer = self.normalizer.to_device(device);
 
-        for item in items.iter() {
-            let d = item.declassify_ref();
-            let input_tensor = Tensor::<1>::from_floats(
-                [
-                    d.median_income,
-                    d.house_age,
-                    d.avg_rooms,
-                    d.avg_bedrooms,
-                    d.population,
-                    d.avg_occupancy,
-                    d.latitude,
-                    d.longitude,
-                ],
-                device,
-            );
-
-            inputs.push(input_tensor.unsqueeze());
-        }
-
-        let inputs = Tensor::cat(inputs, 0);
-        let inputs = self.normalizer.to_device(device).normalize(inputs);
-
-        let targets = items
-            .iter()
-            .map(|item| Tensor::<1>::from_floats([item.declassify_ref().median_house_value], device))
-            .collect();
-
-        let targets = Tensor::cat(targets, 0);
-
-        Labeled::new(HousingBatch { inputs, targets })
+        items
+            .into_iter()
+            .map(|item| fcall!(HousingBatcher::item_to_tensors(&self, item, device)))
+            .reduce(|a, b| fcall!(HousingBatcher::cat_pairs(&self, a, b)))
+            .unwrap()
+            .map(|(inputs, targets)| HousingBatch {
+                inputs: normalizer.normalize(inputs),
+                targets,
+            })
     }
 }

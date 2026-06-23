@@ -27,13 +27,15 @@ pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
     let items: Vec<Labeled<HousingDistrictItem, Secret>> = dataset.iter().take(1000).collect();
 
     let batcher = HousingBatcher::new(&device);
-    let batch = declassify(batcher.batch(items.clone(), &device));
-    let predicted = model.forward(batch.inputs);
-    let targets = batch.targets;
+    let batch = batcher.batch(items, &device);
 
-    // Display the predicted vs expected values
-    let predicted = predicted.squeeze_dim::<1>(1).into_data();
-    let expected = targets.into_data();
+    let (labeled_predicted, labeled_targets) = batch
+        .map(|b| (model.forward(b.inputs).squeeze_dim::<1>(1), b.targets))
+        .split();
+
+    // Declassify at the public output boundary — predictions are being displayed
+    let predicted = declassify(labeled_predicted).into_data();
+    let expected = declassify(labeled_targets).into_data();
 
     let points = predicted
         .iter::<f32>()
