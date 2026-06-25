@@ -1,17 +1,23 @@
 use burn::{
     data::{dataloader::batcher::Batcher, dataset::Dataset},
     module::Module,
+    prelude::*,
     store::ModuleRecord,
     tensor::Device,
 };
+use macros::fcall;
 use rgb::RGB8;
 use textplots::{Chart, ColorPlot, Shape};
 use typing_rules::*; // import filament ifc
 
 use crate::{
-    dataset::{HousingBatcher, HousingDataset, HousingDistrictItem},
-    model::RegressionModelConfig,
+    dataset::{HousingBatch, HousingBatcher, HousingDataset, HousingDistrictItem},
+    model::{RegressionModel, RegressionModelConfig},
 };
+
+fn run_forward(batch: HousingBatch, model: &RegressionModel) -> (Tensor<1>, Tensor<1>) {
+    (model.forward(batch.inputs).squeeze_dim::<1>(1), batch.targets)
+}
 
 pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
     let device = device.into();
@@ -29,9 +35,7 @@ pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
     let batcher = HousingBatcher::new(&device);
     let batch = batcher.batch(items, &device);
 
-    let (labeled_predicted, labeled_targets) = batch
-        .map(|b| (model.forward(b.inputs).squeeze_dim::<1>(1), b.targets))
-        .split();
+    let (labeled_predicted, labeled_targets) = fcall!(run_forward(batch, &model)).split();
 
     // Declassify at the public output boundary — predictions are being displayed
     let predicted = declassify(labeled_predicted).into_data();

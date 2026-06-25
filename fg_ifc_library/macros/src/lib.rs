@@ -90,86 +90,283 @@ pub fn fcall(input: TokenStream) -> TokenStream {
         }
     }
 
-    let call = match expr_to_check {
-        syn::Expr::Try(expr_try) => {
-            has_question_mark = true;
-            if let syn::Expr::Call(call) = *expr_try.expr {
-                call // It was func(...)?
-            } else {
-                return syn::Error::new_spanned(expr_try, "fcall! expects a function call").to_compile_error().into();
+    // Handle struct literals: fcall!(Path { field1: val1, field2: val2 })
+    // Chain through each field's value and reconstruct the struct inside Labeled::new(...).
+    // This allows writing e.g. fcall!(HousingBatch { inputs: labeled_a, targets: labeled_b })
+    // without any helper constructor function.
+    let expr_to_check = match expr_to_check {
+        syn::Expr::Struct(s) => {
+            let path = &s.path;
+            let mut struct_chains: Vec<(Ident, TokenStream2)> = Vec::new();
+            let mut field_tokens: Vec<TokenStream2> = Vec::new();
+            for (i, field) in s.fields.iter().enumerate() {
+                let member = &field.member;
+                let val = &field.expr;
+                let name = format_ident!("__v{}", i);
+                struct_chains.push((name.clone(), quote! { (#val) }));
+                field_tokens.push(quote! { #member: #name });
             }
+            let mut expanded = quote! {
+                ::typing_rules::lattice::Labeled::<_, ::typing_rules::lattice::Public>::new(
+                    #path { #(#field_tokens),* }
+                )
+            };
+            for (name, target) in struct_chains.iter().rev() {
+                expanded = quote! { (#target).__chain(|#name| { #expanded }) };
+            }
+            let panic_guard = quote! {
+                let __fcall_prev_hook = ::std::panic::take_hook();
+                ::std::panic::set_hook(::std::boxed::Box::new(|_| {}));
+                struct __FcallPanicGuard(::std::option::Option<::std::boxed::Box<dyn ::std::ops::FnMut()>>);
+                impl ::std::ops::Drop for __FcallPanicGuard {
+                    fn drop(&mut self) {
+                        if !::std::thread::panicking() {
+                            if let ::std::option::Option::Some(mut f) = self.0.take() { f(); }
+                        }
+                    }
+                }
+                let mut __fcall_hook_opt = ::std::option::Option::Some(__fcall_prev_hook);
+                let __fcall_panic_guard = __FcallPanicGuard(::std::option::Option::Some(::std::boxed::Box::new(move || {
+                    if let ::std::option::Option::Some(hook) = __fcall_hook_opt.take() {
+                        ::std::panic::set_hook(hook);
+                    }
+                })));
+            };
+            return TokenStream::from(quote! {
+                {
+                    use ::typing_rules::function_rewrite::SecureChain;
+                    use ::typing_rules::function_rewrite::SecureChainRef;
+                    #panic_guard
+                    let __fcall_result = { #expanded };
+                    drop(__fcall_panic_guard);
+                    __fcall_result
+                }
+            });
         }
-        syn::Expr::Call(call) => call, // It was func(...)
-        _ => return syn::Error::new_spanned(expr_to_check, "fcall! expects a function call or awaited call").to_compile_error().into(),
+        other => other,
     };
 
-    let func = call.func;
-    let args = call.args;
+    // Extract the base function call and any trailing method chain.
+    // fcall!(func(args).m1().m2()) calls func(args) with labeled arg unwrapping
+    // and applies .m1().m2() on the raw result before wrapping in Labeled.
+    // This handles e.g. Tensor::from_floats([item.field, ...], device).unsqueeze()
+    // where unsqueeze(self) consumes its receiver and cannot be called via mcall!'s __chain_ref.
+    let (func, args, method_suffix): (_, _, TokenStream2) = match expr_to_check {
+        syn::Expr::Try(expr_try) => {
+            has_question_mark = true;
+            match *expr_try.expr {
+                syn::Expr::Call(call) => (call.func, call.args, quote! {}),
+                other => return syn::Error::new_spanned(other, "fcall! expects a function call").to_compile_error().into(),
+            }
+        }
+        syn::Expr::Call(call) => (call.func, call.args, quote! {}),
+        other => {
+            // Peel trailing method chain to find the base Call.
+            let mut current = other;
+            let mut methods_rev: Vec<TokenStream2> = Vec::new();
+            let base_call = loop {
+                match current {
+                    syn::Expr::MethodCall(mc) => {
+                        let method = mc.method;
+                        let margs = mc.args;
+                        let turbofish = mc.turbofish;
+                        let receiver = *mc.receiver;
+                        let tok = if let Some(ref tf) = turbofish {
+                            quote! { .#method::<#tf>(#margs) }
+                        } else {
+                            quote! { .#method(#margs) }
+                        };
+                        methods_rev.push(tok);
+                        current = receiver;
+                    }
+                    syn::Expr::Call(c) => break c,
+                    expr => return syn::Error::new_spanned(expr, "fcall! expects a function call or method chain on a function call").to_compile_error().into(),
+                }
+            };
+            let suffix = methods_rev.into_iter().rev().fold(TokenStream2::new(), |acc, m| quote! { #acc #m });
+            (base_call.func, base_call.args, suffix)
+        }
+    };
 
-    // 3. Prepare chain variables
-    let arg_count = args.len();
-    let unwrapped_names: Vec<_> = (0..arg_count).map(|i| format_ident!("__v{}", i)).collect();
-
-    // 3a. Classify each argument:
-    //   &expr   → use chain_ref on `expr` (inherent for Labeled)
-    //             closure receives &T, label propagates from Labeled or defaults to Public
-    //   &mut expr → same but mutable (chain_mut_ref, future extension; treat as chain_ref for now)
-    //   anything else → existing chain() behaviour, closure receives T by value
-    //
-    // chain_method[i] — "chain" or "chain_ref" token
-    // chain_target[i] — expression we call the method on (strips outer & for ref args)
-    // inner_arg[i]    — what we pass to the function inside the closure (__vi or &__vi)
+    // 3. Prepare chain entries and inner call args.
+    // For regular and reference args: one chain entry per arg.
+    // For Expr::Array args: scan elements for `base.field` patterns — each unique base
+    // variable becomes its own chain entry, and the inner call arg is the reconstructed
+    // array with base paths replaced by the chain vars. This lets labeled variables
+    // embedded inside array literals (e.g. `[item.x, item.y]` where item: Labeled<T,L>)
+    // be properly tracked without any user-written helper functions.
     enum ChainKind {
         Owned,
         Ref,
     }
-    struct ArgInfo {
+    struct ChainEntry {
         kind: ChainKind,
         target: TokenStream2,
-        inner_arg: TokenStream2,
+        name: Ident,
     }
-    let arg_infos: Vec<ArgInfo> = args
-        .iter()
-        .zip(unwrapped_names.iter())
-        .map(|(arg, name)| {
-            match arg {
-                syn::Expr::Reference(r) if r.mutability.is_none() => ArgInfo {
-                    kind: ChainKind::Ref,
-                    target: {
-                        let e = &r.expr;
-                        quote! { #e }
-                    },
-                    inner_arg: quote! { #name }, // closure already receives &T from chain_ref
-                },
-                other => ArgInfo {
+
+    let mut chain_entries: Vec<ChainEntry> = Vec::new();
+    let mut inner_call_args: Vec<TokenStream2> = Vec::new();
+    let mut chain_idx: usize = 0;
+
+    for arg in args.iter() {
+        match arg {
+            syn::Expr::Reference(r) if r.mutability.is_none() => {
+                let name = format_ident!("__v{}", chain_idx);
+                chain_idx += 1;
+                let e = &r.expr;
+                inner_call_args.push(quote! { #name });
+                chain_entries.push(ChainEntry { kind: ChainKind::Ref, target: quote! { #e }, name });
+            }
+            syn::Expr::Array(arr) => {
+                // Collect unique base variables from field-access elements (`base.field`
+                // where base is a simple path). Each unique base becomes a chain entry.
+                let mut seen = std::collections::HashSet::<String>::new();
+                let mut bases: Vec<(String, Ident)> = Vec::new();
+
+                for elem in &arr.elems {
+                    if let syn::Expr::Field(f) = elem {
+                        if let syn::Expr::Path(p) = f.base.as_ref() {
+                            let key = quote!(#p).to_string();
+                            if !seen.contains(&key) {
+                                seen.insert(key.clone());
+                                let name = format_ident!("__v{}", chain_idx);
+                                chain_idx += 1;
+                                chain_entries.push(ChainEntry {
+                                    kind: ChainKind::Owned,
+                                    target: quote! { (#p) },
+                                    name: name.clone(),
+                                });
+                                bases.push((key, name));
+                            }
+                        }
+                    }
+                }
+
+                if bases.is_empty() {
+                    // No field-access patterns found; treat as a plain owned arg.
+                    let name = format_ident!("__v{}", chain_idx);
+                    chain_idx += 1;
+                    inner_call_args.push(quote! { #name });
+                    chain_entries.push(ChainEntry {
+                        kind: ChainKind::Owned,
+                        target: quote! { (#arr) },
+                        name,
+                    });
+                } else {
+                    // Reconstruct the array substituting base paths with their chain vars.
+                    let elems: Vec<TokenStream2> = arr.elems.iter().map(|elem| {
+                        if let syn::Expr::Field(f) = elem {
+                            if let syn::Expr::Path(p) = f.base.as_ref() {
+                                let key = quote!(#p).to_string();
+                                if let Some((_, inner)) = bases.iter().find(|(k, _)| k == &key) {
+                                    let member = &f.member;
+                                    return quote! { #inner.#member };
+                                }
+                            }
+                        }
+                        quote! { #elem }
+                    }).collect();
+                    inner_call_args.push(quote! { [#(#elems),*] });
+                }
+            }
+            // vec![a, b] or vec![a.field, b.field] where elements may be labeled variables.
+            // Each unique base variable (plain path or field-access base) becomes a chain
+            // entry; the inner arg is vec![__v0, __v1, ...] with unwrapped values.
+            syn::Expr::Macro(mac) if mac.mac.path.segments.last().map(|s| s.ident == "vec").unwrap_or(false) => {
+                let tokens = mac.mac.tokens.clone();
+                let elems: syn::punctuated::Punctuated<Expr, syn::Token![,]> =
+                    syn::parse::Parser::parse2(
+                        syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated,
+                        tokens,
+                    ).unwrap_or_default();
+
+                let mut seen = std::collections::HashSet::<String>::new();
+                let mut bases: Vec<(String, Ident, TokenStream2)> = Vec::new();
+
+                for elem in &elems {
+                    let (key, base_target) = match elem {
+                        syn::Expr::Field(f) if matches!(f.base.as_ref(), syn::Expr::Path(_)) => {
+                            let p = if let syn::Expr::Path(p) = f.base.as_ref() { p } else { unreachable!() };
+                            (Some(quote!(#p).to_string()), quote! { (#p) })
+                        }
+                        syn::Expr::Path(p) => (Some(quote!(#p).to_string()), quote! { (#p) }),
+                        _ => (None, quote! {}),
+                    };
+                    if let Some(key) = key {
+                        if !seen.contains(&key) {
+                            seen.insert(key.clone());
+                            let name = format_ident!("__v{}", chain_idx);
+                            chain_idx += 1;
+                            chain_entries.push(ChainEntry { kind: ChainKind::Owned, target: base_target.clone(), name: name.clone() });
+                            bases.push((key, name, base_target));
+                        }
+                    }
+                }
+
+                if bases.is_empty() {
+                    let name = format_ident!("__v{}", chain_idx);
+                    chain_idx += 1;
+                    inner_call_args.push(quote! { #name });
+                    chain_entries.push(ChainEntry { kind: ChainKind::Owned, target: quote! { (#mac) }, name });
+                } else {
+                    let reconstructed: Vec<TokenStream2> = elems.iter().map(|elem| {
+                        let key = match elem {
+                            syn::Expr::Field(f) if matches!(f.base.as_ref(), syn::Expr::Path(_)) => {
+                                if let syn::Expr::Path(p) = f.base.as_ref() { Some(quote!(#p).to_string()) } else { None }
+                            }
+                            syn::Expr::Path(p) => Some(quote!(#p).to_string()),
+                            _ => None,
+                        };
+                        if let Some(key) = key {
+                            if let Some((_, inner, _)) = bases.iter().find(|(k, _, _)| k == &key) {
+                                return match elem {
+                                    syn::Expr::Field(f) => { let m = &f.member; quote! { #inner.#m } }
+                                    _ => quote! { #inner },
+                                };
+                            }
+                        }
+                        quote! { #elem }
+                    }).collect();
+                    inner_call_args.push(quote! { vec![#(#reconstructed),*] });
+                }
+            }
+            other => {
+                let name = format_ident!("__v{}", chain_idx);
+                chain_idx += 1;
+                inner_call_args.push(quote! { #name });
+                chain_entries.push(ChainEntry {
                     kind: ChainKind::Owned,
                     target: quote! { (#other) },
-                    inner_arg: quote! { #name },
-                },
+                    name,
+                });
             }
-        })
-        .collect();
+        }
+    }
 
     // 4. Inner Execution Logic
-    let inner_call_args: Vec<&TokenStream2> = arg_infos.iter().map(|a| &a.inner_arg).collect();
     let mut expanded = if has_await {
         quote! {
             ::typing_rules::lattice::Labeled::<_, ::typing_rules::lattice::Public>::new(
-                #func( #(#inner_call_args),* ).await
+                #func( #(#inner_call_args),* ) #method_suffix .await
             )
         }
     } else {
         quote! {
             ::typing_rules::lattice::Labeled::<_, ::typing_rules::lattice::Public>::new(
-                #func( #(#inner_call_args),* )
+                #func( #(#inner_call_args),* ) #method_suffix
             )
         }
     };
 
     // 5. Wrap args in .chain() / .chain_ref() / .async_chain()
+    // Label idempotency (L ∨ L = L) is guaranteed by the Label supertrait bound
+    // Join<Self, Out = Self>, so chaining multiple args of the same label L produces
+    // Join<L, Join<L, Public>> = Join<L, L> = L — no special handling needed.
     if has_await {
-        for (info, name) in arg_infos.iter().zip(unwrapped_names.iter()).rev() {
-            let target = &info.target;
+        for entry in chain_entries.iter().rev() {
+            let target = &entry.target;
+            let name = &entry.name;
             expanded = quote! {
                 (#target).async_chain(|#name| async move {
                     #expanded
@@ -177,9 +374,10 @@ pub fn fcall(input: TokenStream) -> TokenStream {
             };
         }
     } else {
-        for (info, name) in arg_infos.iter().zip(unwrapped_names.iter()).rev() {
-            let target = &info.target;
-            expanded = match info.kind {
+        for entry in chain_entries.iter().rev() {
+            let target = &entry.target;
+            let name = &entry.name;
+            expanded = match entry.kind {
                 ChainKind::Ref => quote! {
                     (#target).__chain_ref(|#name| {
                         #expanded

@@ -16,11 +16,11 @@ The key types and tools used here:
   dataset and consumed by the batcher
 - **`Secret`** — the label used in this example; sits above `Public` in the lattice, meaning
   Secret data cannot flow to a Public output without declassification
-- **`declassify_ref()`** — borrows the inner `T` from `Labeled<T, L>` without consuming it or
-  the label. Used at the tensor boundary inside the batcher — tensors are not labeled, so this
-  is the controlled crossing point into the tensor world
+- **`fcall!(F::func(&receiver, arg, ...))`** — UFCS-style macro for calling existing library
+  functions that don't know about IFC. Each labeled arg is unwrapped via `__chain`/`__chain_ref`,
+  the function is called with raw values, and the result is rewrapped with the joined label.
 - **`declassify()`** — consumes a `Labeled<T, L>` and returns the raw `T`, stripping the label
-  entirely. Used at public output boundaries (e.g., displaying predictions in a chart)
+  entirely. Used only at public output boundaries (e.g., displaying predictions in a chart)
 
 ### Why tensors are not labeled
 
@@ -28,12 +28,46 @@ In burn, tensor operations (matmul, relu, loss, backward) are executed by the ba
 ndarray, etc.) and have no knowledge of the IFC type system. Labeling individual tensors would
 require rewriting every tensor operation in burn. Instead, IFC tracks sensitivity at the
 **batch level**: the batcher receives `Vec<Labeled<Item, L>>` and returns `Labeled<Batch, L>`,
-where the batch contains plain tensors. `declassify_ref()` is the explicit, auditable point
-where each item's fields cross from the labeled world into the tensor world.
+where the batch contains plain tensors. The explicit crossing from labeled items into the tensor
+world happens inside helper methods called via `fcall!`.
+
+### Why `Labeled::map()` is backend-only
+
+`Labeled::map()` and `Labeled::__map()` are implementation details of the IFC library and
+burn-train internals. User code (dataset.rs, inference.rs) should not call them directly,
+because doing so bypasses the macro's controlled unwrap/rewrap discipline. Instead, user code
+uses `fcall!` to call existing library functions, letting the macro handle the label
+propagation.
 
 ---
 
 ## Changes
+
+### `fg_ifc_library/typing_rules/src/lattice.rs`
+
+**What changed:** Added `Join<Self, Out = Self>` to the `Label` supertrait.
+
+**Why:** When `fcall!` chains two labeled owned args of the same generic type `L`, the
+resulting type involves `Join<L, L>`. This is idempotency of join (`L ∨ L = L`) — always
+true in any join-semilattice, but not provable from the original `Label` supertrait which
+only guaranteed `Join<Public, Out = Self>`. Adding `Join<Self, Out = Self>` to the supertrait
+makes this available to any generic `L: Label` without needing special-case macro logic.
+
+All existing concrete labels (`Public`, `Secret`, `A`, `B`, `AB`) already had `impl Join<Self>`
+defined (e.g., `impl Join<Secret> for Secret { type Out = Secret; }`), so this is purely a
+bound tightening — no new implementations needed.
+
+**Before** (`lattice.rs:13`):
+```rust
+pub trait Label: Clone + Copy + Default + Send + Sync + Join<Public, Out = Self> + 'static {}
+```
+
+**After** ([`lattice.rs:13`](../../fg_ifc_library/typing_rules/src/lattice.rs#L13)):
+```rust
+pub trait Label: Clone + Copy + Default + Send + Sync + Join<Public, Out = Self> + Join<Self, Out = Self> + 'static {}
+```
+
+---
 
 ### `Cargo.toml`
 
@@ -128,8 +162,7 @@ fn main() {
 ### `src/dataset.rs`
 
 **What changed:** Added `L: Label` type parameter to `HousingDataset` and to the `Batcher`
-implementation; used `declassify_ref()` inside `batch()` to cross from labeled items into
-the tensor world.
+implementation; replaced `declassify_ref()` with three helper methods called via `fcall!`.
 
 **Burn context:** In burn, a `Dataset<Item>` is a collection of typed records loaded from a
 source (here, a SQLite-backed HuggingFace dataset). A `Batcher<Item, Batch>` collects a
@@ -137,12 +170,23 @@ source (here, a SQLite-backed HuggingFace dataset). A `Batcher<Item, Batch>` col
 With IFC, items come out of the dataset already labeled (`Labeled<HousingDistrictItem, L>`),
 so the batcher signature changes to `Vec<Labeled<Item, L>> -> Labeled<Batch, L>`.
 
-Inside `batch()`, each item's fields must be passed to `Tensor::from_floats([...])`, which
-takes raw `f32` values. `mcall!(item.field)` would give `Labeled<f32, L>`, which cannot go
-directly into a tensor constructor. `declassify_ref()` is the correct tool: it borrows the
-raw `HousingDistrictItem` from the labeled wrapper, reads its fields, and lets the tensor
-constructor proceed. After all tensors are assembled, `Labeled::new(HousingBatch { ... })`
-rewraps the batch with the label, re-entering the labeled world.
+**Why `fcall!` and not `declassify_ref()`:** `declassify_ref()` strips the label immediately
+inside the batch loop — earlier than necessary and without any compiler-enforced discipline.
+`fcall!` is the correct boundary: it unwraps each labeled item only at the call site of a
+specific library function (`Tensor::from_floats`, `Tensor::cat`, `normalizer.normalize`),
+and the macro automatically rewraps the result with the propagated label.
+
+**Why helper methods:** `fcall!` calls existing functions that don't know about IFC. The three
+helpers (`item_to_tensors`, `cat_pairs`, `build_batch`) each wrap a natural step in the
+batching process that calls into burn library functions. They take and return raw (unlabeled)
+types; `fcall!` is what bridges them into the labeled world.
+
+- `item_to_tensors`: converts one `HousingDistrictItem` into a `(Tensor<2>, Tensor<1>)` pair
+  (inputs as a `[1 × 8]` matrix, target as a 1-element vector)
+- `cat_pairs`: stacks two `(Tensor<2>, Tensor<1>)` pairs along axis 0, building up a batch
+  row by row via `Tensor::cat`
+- `build_batch`: normalizes the stacked input tensor (min–max normalization) and packages the
+  pair into a `HousingBatch`
 
 **Before** (`src/dataset.rs:58-70`, `src/dataset.rs:143-178`):
 ```rust
@@ -153,12 +197,13 @@ pub struct HousingDataset {
 
 impl Dataset<HousingDistrictItem> for HousingDataset { ... }
 
-// Batcher signature was unlabeled
+// Batcher used declassify_ref() to access fields
 impl Batcher<HousingDistrictItem, HousingBatch> for HousingBatcher {
     fn batch(&self, items: Vec<HousingDistrictItem>, device: &Device) -> HousingBatch {
         for item in items.iter() {
+            let d = item.declassify_ref(); // stripped label here
             let input_tensor = Tensor::<1>::from_floats(
-                [item.median_income, item.house_age, ...],
+                [d.median_income, d.house_age, ...],
                 device,
             );
             // ...
@@ -168,7 +213,7 @@ impl Batcher<HousingDistrictItem, HousingBatch> for HousingBatcher {
 }
 ```
 
-**After** ([`src/dataset.rs:58-70`](src/dataset.rs#L58-L70), [`src/dataset.rs:143-178`](src/dataset.rs#L143-L178)):
+**After** ([`src/dataset.rs:59-184`](src/dataset.rs#L59-L184)):
 ```rust
 // Dataset is now generic over the label
 pub struct HousingDataset<L: Label> {
@@ -177,27 +222,49 @@ pub struct HousingDataset<L: Label> {
 
 impl<L: Label> Dataset<HousingDistrictItem, L> for HousingDataset<L> { ... }
 
-// Batcher signature now threaded with L
+// Three helpers that operate on raw (unlabeled) types
+impl HousingBatcher {
+    fn item_to_tensors(&self, item: HousingDistrictItem, device: &Device) -> (Tensor<2>, Tensor<1>) {
+        let input = Tensor::<1>::from_floats(
+            [item.median_income, item.house_age, item.avg_rooms, item.avg_bedrooms,
+             item.population, item.avg_occupancy, item.latitude, item.longitude],
+            device,
+        ).unsqueeze();
+        let target = Tensor::<1>::from_floats([item.median_house_value], device);
+        (input, target)
+    }
+
+    fn cat_pairs(&self, a: (Tensor<2>, Tensor<1>), b: (Tensor<2>, Tensor<1>)) -> (Tensor<2>, Tensor<1>) {
+        (Tensor::cat(vec![a.0, b.0], 0), Tensor::cat(vec![a.1, b.1], 0))
+    }
+
+    fn build_batch(&self, pair: (Tensor<2>, Tensor<1>), device: &Device) -> HousingBatch {
+        HousingBatch {
+            inputs: self.normalizer.to_device(device).normalize(pair.0),
+            targets: pair.1,
+        }
+    }
+}
+
+// Batcher signature threaded with L; uses fcall! instead of declassify_ref
 impl<L: Label> Batcher<HousingDistrictItem, HousingBatch, L> for HousingBatcher {
     fn batch(&self, items: Vec<Labeled<HousingDistrictItem, L>>, device: &Device) -> Labeled<HousingBatch, L> {
-        for item in items.iter() {
-            let d = item.declassify_ref(); // cross into tensor world
-            let input_tensor = Tensor::<1>::from_floats(
-                [d.median_income, d.house_age, d.avg_rooms, d.avg_bedrooms,
-                 d.population, d.avg_occupancy, d.latitude, d.longitude],
-                device,
-            );
-            // ...
-        }
-        let targets = items
-            .iter()
-            .map(|item| Tensor::<1>::from_floats([item.declassify_ref().median_house_value], device))
-            .collect();
-        // ...
-        Labeled::new(HousingBatch { inputs, targets }) // rewrap with label
+        let labeled_pair = items
+            .into_iter()
+            .map(|item| fcall!(HousingBatcher::item_to_tensors(&self, item, device)))
+            .reduce(|a, b| fcall!(HousingBatcher::cat_pairs(&self, a, b)))
+            .unwrap();
+
+        fcall!(HousingBatcher::build_batch(&self, labeled_pair, device))
     }
 }
 ```
+
+Note: `.map(|item| ...)` here is `Iterator::map` (standard Rust iterator), NOT `Labeled::map`.
+The result of each `fcall!` is a `Labeled<(Tensor<2>, Tensor<1>), L>`, and `reduce` folds
+them together by calling `fcall!(cat_pairs(...))` with two labeled owned args. This works
+because the `Label` supertrait now requires `Join<Self, Out = Self>`, making `Join<L, L> = L`
+available for any generic `L`.
 
 ---
 
@@ -229,26 +296,36 @@ let valid_dataset = HousingDataset::<Secret>::validation();
 
 ### `src/inference.rs`
 
-**What changed:** Applied `Secret` label to the test dataset and items; added explicit
-`declassify()` at the public output boundary before passing the batch to the model.
+**What changed:** Applied `Secret` label to the test dataset; replaced `declassify(batch)` at
+the batch boundary with `fcall!(run_forward(batch, &model)).split()` and moved
+`declassify()` to the true public output — the terminal chart.
 
 **Burn context:** Inference is the phase after training where the saved model is loaded and
-run on test data to evaluate real-world performance. In this example, the test split of the
-California housing dataset is loaded, batched, passed through `model.forward()`, and the
-predictions are displayed in a terminal scatter chart.
+run on test data. In this example, 1000 test items are loaded, batched, passed through the
+model's forward pass, and the predicted vs. expected house values are displayed in a terminal
+scatter chart.
 
-The predictions are derived from `Secret` input data (house values, income, location), but the
-chart itself is a public output — anyone can see it. `declassify()` at line 30 is the explicit,
-auditable point where the team has decided: *"we are intentionally making this Secret batch
-public."* Without it, `batch` would be `Labeled<HousingBatch, Secret>`, and `model.forward(batch.inputs)`
-would fail to compile because `model.forward` expects a raw (unlabeled) `Tensor`, not a
-labeled one.
+**Why `fcall!` instead of `Labeled::map()`:** `Labeled::map()` is an IFC library primitive
+reserved for internal use (the backend). User code should not call it directly. `fcall!`
+is the correct boundary for calling the model's `forward` method (a burn library function)
+with a labeled batch: it unwraps the `Labeled<HousingBatch, Secret>`, passes the raw batch
+to `run_forward`, and rewraps the result.
 
-This is different from training: during training, the Secret label stays on the batch the
-entire time it flows through the train step, gradient computation, and optimizer. It never
-needs to be declassified because those outputs (weight updates) stay inside the model.
-In inference, the final predictions are displayed externally, which requires an explicit
-declassification.
+**Why a `run_forward` helper:** `fcall!` needs a named function path (UFCS style). The helper
+captures the two operations that must happen at the forward-pass boundary: running
+`model.forward(batch.inputs)` and extracting `batch.targets`. Both are burn library operations
+on raw tensors. `fcall!` bridges from the labeled `batch` into these raw operations.
+
+**Why `.split()`:** `run_forward` returns a raw tuple `(Tensor<1>, Tensor<1>)`. After `fcall!`
+wraps it, the result is `Labeled<(Tensor<1>, Tensor<1>), Secret>`. `.split()` destructures
+this into two separately labeled values: `(Labeled<Tensor<1>, Secret>, Labeled<Tensor<1>, Secret>)`.
+This lets each tensor be declassified independently at the output boundary.
+
+**Why `declassify()` at the chart, not the batch:** The batch is still an input — the `Secret`
+label should flow through the forward pass until the very last moment. `declassify()` at the
+chart display line is the explicit, auditable decision: *"we are intentionally making these
+Secret predictions public."* Declassifying earlier (at the batch level) was incorrect because
+it removed the label before the forward pass, hiding the information flow from the type system.
 
 **Before** (`src/inference.rs:26-32`):
 ```rust
@@ -256,20 +333,32 @@ let dataset = HousingDataset::test();
 let items: Vec<HousingDistrictItem> = dataset.iter().take(1000).collect();
 
 let batcher = HousingBatcher::new(&device);
-let batch = batcher.batch(items.clone(), &device);
+let batch = declassify(batcher.batch(items.clone(), &device)); // too early
 let predicted = model.forward(batch.inputs);
 let targets = batch.targets;
 ```
 
-**After** ([`src/inference.rs:26-32`](src/inference.rs#L26-L32)):
+**After** ([`src/inference.rs:18-42`](src/inference.rs#L18-L42)):
 ```rust
+// Helper: takes raw HousingBatch and model ref, returns raw output tensors.
+// Called via fcall! to bridge from Labeled<HousingBatch, Secret> into burn.
+fn run_forward(batch: HousingBatch, model: &RegressionModel) -> (Tensor<1>, Tensor<1>) {
+    (model.forward(batch.inputs).squeeze_dim::<1>(1), batch.targets)
+}
+
+// In infer():
 let dataset = HousingDataset::<Secret>::test();
 let items: Vec<Labeled<HousingDistrictItem, Secret>> = dataset.iter().take(1000).collect();
 
 let batcher = HousingBatcher::new(&device);
-let batch = declassify(batcher.batch(items.clone(), &device)); // explicit public boundary
-let predicted = model.forward(batch.inputs);
-let targets = batch.targets;
+let batch = batcher.batch(items, &device); // Labeled<HousingBatch, Secret>
+
+// fcall! unwraps batch, calls run_forward with raw args, rewraps result
+let (labeled_predicted, labeled_targets) = fcall!(run_forward(batch, &model)).split();
+
+// Declassify at the actual public output boundary
+let predicted = declassify(labeled_predicted).into_data();
+let expected = declassify(labeled_targets).into_data();
 ```
 
 ---
@@ -280,25 +369,32 @@ let targets = batch.targets;
 HuggingFace SQLite
        │
        ▼
-HousingDataset<Secret>          ← data is labeled Secret at source
+HousingDataset<Secret>                ← data is labeled Secret at source
        │  Vec<Labeled<Item, Secret>>
        ▼
 HousingBatcher::batch()
-  ├── item.declassify_ref()     ← controlled crossing into tensor world
-  ├── Tensor::from_floats(...)  ← raw tensors, no label
-  └── Labeled::new(HousingBatch { inputs, targets })  ← rewrap with label
+  ├── fcall!(item_to_tensors(&self, item, device))   ← fcall! crosses into tensor world
+  │     item unwrapped → raw fields → Tensor::from_floats → rewrap Labeled<pair, Secret>
+  ├── fcall!(cat_pairs(&self, a, b))                 ← two labeled args, same label L
+  │     both a and b unwrapped → Tensor::cat → rewrap Labeled<pair, Secret>
+  │     (works because Label: Join<Self, Out = Self> → Join<L,L> = L for generic L)
+  └── fcall!(build_batch(&self, labeled_pair, device))
+        pair unwrapped → normalize → HousingBatch → rewrap Labeled<HousingBatch, Secret>
        │  Labeled<HousingBatch, Secret>
        ▼
-Training loop (burn-train)      ← Secret flows through forward/loss/backward
-  └── gradients → optimizer     ← label consumed inside burn-train (never public)
+Training loop (burn-train)            ← Secret flows through forward/loss/backward
+  └── gradients → optimizer           ← label consumed inside burn-train (never public)
 
        │  Labeled<HousingBatch, Secret>   (inference path)
        ▼
-declassify(batch)               ← explicit public boundary (predictions will be displayed)
-       │  HousingBatch (raw)
+fcall!(run_forward(batch, &model))    ← batch unwrapped, forward + squeeze, rewrap
+  └── .split()                        ← Labeled<(T1,T1), S> → (Labeled<T1,S>, Labeled<T1,S>)
+       │  Labeled<Tensor<1>, Secret>  (predicted)
+       │  Labeled<Tensor<1>, Secret>  (targets)
        ▼
-model.forward(batch.inputs)     ← predictions
+declassify(labeled_predicted)         ← explicit public boundary (chart display)
+declassify(labeled_targets)
        │
        ▼
-Terminal chart                  ← public output
+Terminal chart                        ← public output
 ```

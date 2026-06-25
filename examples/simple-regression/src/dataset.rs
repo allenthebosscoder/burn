@@ -6,7 +6,7 @@ use burn::{
     prelude::*,
 };
 
-use macros::fcall;
+use macros::{fcall, mcall};
 use typing_rules::*; // import filament ifc
 
 pub const NUM_FEATURES: usize = 8;
@@ -17,7 +17,7 @@ const FEATURES_MAX: [f32; NUM_FEATURES] = [
     15., 52., 141.9091, 34.0667, 35682., 1243.3333, 41.95, -114.31,
 ];
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HousingDistrictItem {
     /// Median income
     #[serde(rename = "MedInc")]
@@ -139,43 +139,26 @@ impl HousingBatcher {
             normalizer: Normalizer::new(device, &FEATURES_MIN, &FEATURES_MAX),
         }
     }
-
-    fn item_to_tensors(&self, item: HousingDistrictItem, device: &Device) -> (Tensor<2>, Tensor<1>) {
-        let input = Tensor::<1>::from_floats(
-            [
-                item.median_income,
-                item.house_age,
-                item.avg_rooms,
-                item.avg_bedrooms,
-                item.population,
-                item.avg_occupancy,
-                item.latitude,
-                item.longitude,
-            ],
-            device,
-        )
-        .unsqueeze();
-        let target = Tensor::<1>::from_floats([item.median_house_value], device);
-        (input, target)
-    }
-
-    fn cat_pairs(&self, a: (Tensor<2>, Tensor<1>), b: (Tensor<2>, Tensor<1>)) -> (Tensor<2>, Tensor<1>) {
-        (Tensor::cat(vec![a.0, b.0], 0), Tensor::cat(vec![a.1, b.1], 0))
-    }
 }
 
-impl<L: Label + Join<L, Out = L>> Batcher<HousingDistrictItem, HousingBatch, L> for HousingBatcher {
+impl<L: Label> Batcher<HousingDistrictItem, HousingBatch, L> for HousingBatcher {
     fn batch(&self, items: Vec<Labeled<HousingDistrictItem, L>>, device: &Device) -> Labeled<HousingBatch, L> {
+        let inputs = items.iter().copied()
+            .map(|item| fcall!(Tensor::<1>::from_floats(
+                [item.median_income, item.house_age, item.avg_rooms, item.avg_bedrooms,
+                 item.population, item.avg_occupancy, item.latitude, item.longitude],
+                device
+            ).unsqueeze()))
+            .reduce(|a, b| fcall!(Tensor::cat(vec![a, b], 0)))
+            .unwrap();
         let normalizer = self.normalizer.to_device(device);
+        let inputs = mcall!(normalizer.normalize(inputs));
 
-        items
-            .into_iter()
-            .map(|item| fcall!(HousingBatcher::item_to_tensors(&self, item, device)))
-            .reduce(|a, b| fcall!(HousingBatcher::cat_pairs(&self, a, b)))
-            .unwrap()
-            .map(|(inputs, targets)| HousingBatch {
-                inputs: normalizer.normalize(inputs),
-                targets,
-            })
+        let targets = items.iter().copied()
+            .map(|item| fcall!(Tensor::<1>::from_floats([item.median_house_value], device)))
+            .reduce(|a, b| fcall!(Tensor::cat(vec![a, b], 0)))
+            .unwrap();
+
+        fcall!(HousingBatch { inputs: inputs, targets: targets })
     }
 }

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 // with Public (the bottom element) returns the label unchanged. This lets the
 // type-checker resolve <L as Join<Public>>::Out = L for any generic L: Label,
 // which is required by __chain when a labeled arg is passed to an unlabeled receiver.
-pub trait Label: Clone + Copy + Default + Send + Sync + Join<Public, Out = Self> + 'static {}
+pub trait Label: Clone + Copy + Default + Send + Sync + Join<Public, Out = Self> + Join<Self, Out = Self> + 'static {}
 
 #[derive(Clone, Copy, Default)]
 pub struct Public;
@@ -203,6 +203,14 @@ impl<T, L: Label> Labeled<T, L> {
     #[doc(hidden)]
     pub fn __map<R, F: FnOnce(T) -> R>(self, f: F) -> Labeled<R, L> {
         Labeled::new(f(self.value))
+    }
+
+    /// For macro use only: run a closure that returns Labeled<U, L> (same label) and pass
+    /// the result through unchanged. Unlike __chain, no join is computed — the label is
+    /// preserved directly. Used by fcall! when multiple owned labeled args share the same label.
+    #[doc(hidden)]
+    pub fn __bind<U, F: FnOnce(T) -> Labeled<U, L>>(self, f: F) -> Labeled<U, L> {
+        f(self.value)
     }
 
     /// For macro use only: transform the inner value while preserving the exact label L.
