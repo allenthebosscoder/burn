@@ -9,6 +9,8 @@ use burn::{
     train::metric::LossMetric,
 };
 
+use typing_rules::*;
+
 #[derive(Config, Debug)]
 pub struct ExpConfig {
     #[config(default = 100)]
@@ -46,29 +48,29 @@ pub fn run(artifact_dir: &str, device: impl Into<Device>) {
     let model = RegressionModelConfig::new().init(&autodiff_device);
 
     // Define train/valid datasets and dataloaders
-    let train_dataset = HousingDataset::train();
-    let valid_dataset = HousingDataset::validation();
+    let train_dataset = HousingDataset::<A>::train();
+    let valid_dataset = HousingDataset::<A>::validation();
 
     println!("Train Dataset Size: {}", train_dataset.len());
     println!("Valid Dataset Size: {}", valid_dataset.len());
 
-    let batcher_train = HousingBatcher::new(&autodiff_device);
-    let batcher_test = HousingBatcher::new(&device);
+    let batcher_train = HousingBatcher::<A>::new(&autodiff_device);
+    let batcher_test = HousingBatcher::<A>::new(&device);
 
-    let dataloader_train = DataLoaderBuilder::new(batcher_train)
+    let dataloader_train = DataLoaderBuilder::<A>::new(batcher_train)
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
         .build(train_dataset);
 
-    let dataloader_test = DataLoaderBuilder::new(batcher_test)
+    let dataloader_test = DataLoaderBuilder::<A>::new(batcher_test)
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
         .build(valid_dataset);
 
     // Model
-    let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
+    let training = SupervisedTraining::Labeled<A>::new(artifact_dir, dataloader_train, dataloader_test)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .with_file_checkpointer(CompactRecorder::new())
@@ -81,6 +83,8 @@ pub fn run(artifact_dir: &str, device: impl Into<Device>) {
         .save(format!("{artifact_dir}/config.json").as_str())
         .unwrap();
 
+    let result = declassify(result);
+    
     result
         .model
         .save_file(

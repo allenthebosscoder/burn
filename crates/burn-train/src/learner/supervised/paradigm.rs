@@ -31,11 +31,12 @@ use burn_optim::lr_scheduler::LrScheduler;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use typing_rules::*;
 
 /// A reference to the training split [DataLoader](DataLoader).
-pub type TrainLoader<LC> = Arc<dyn DataLoader<TrainingModelInput<LC>>>;
+pub type TrainLoader<LC> = Arc<dyn DataLoader<TrainingModelInput<LC>, L>>;
 /// A reference to the validation split [DataLoader](DataLoader).
-pub type ValidLoader<LC> = Arc<dyn DataLoader<InferenceModelInput<LC>>>;
+pub type ValidLoader<LC> = Arc<dyn DataLoader<InferenceModelInput<LC>,L>>;
 /// The event processor type for supervised learning.
 pub type SupervisedTrainingEventProcessor<LC> = AsyncProcessorTraining<
     LearnerEvent<TrainingModelOutput<LC>>,
@@ -90,8 +91,8 @@ where
     /// * `dataloader_valid` - The dataloader for the validation split.
     pub fn new(
         directory: impl AsRef<Path>,
-        dataloader_train: Arc<dyn DataLoader<<M as TrainStep>::Input>>,
-        dataloader_valid: Arc<dyn DataLoader<<M as InferenceStep>::Input>>,
+        dataloader_train: Arc<dyn DataLoader<<M as TrainStep>::Input, L>>,
+        dataloader_valid: Arc<dyn DataLoader<<M as InferenceStep>::Input, L>>,
     ) -> Self {
         let directory = directory.as_ref().to_path_buf();
         let experiment_log_file = directory.join("experiment.log");

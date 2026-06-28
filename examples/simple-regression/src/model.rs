@@ -1,4 +1,7 @@
 use crate::dataset::{HousingBatch, NUM_FEATURES};
+
+use typing_rules::*;
+
 use burn::{
     nn::{
         Linear, LinearConfig, Relu,

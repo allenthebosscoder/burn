@@ -16,15 +16,13 @@ pub struct InMemDataset<I, L: Label> {
 }
 
 impl<I, L: Label> InMemDataset<I, L> {
-    /// Creates a new in memory dataset from the given items.
+    /// Creates a new in memory dataset from the given labeled items.
     pub fn new(items: Vec<Labeled<I, L>>) -> Self {
-        InMemDataset {
-            items,
-        }
+        InMemDataset { items }
     }
 }
 
-impl<I, L: Label> Dataset<I, L> for InMemDataset<I, L>
+impl<I, L> Dataset<I, L> for InMemDataset<I, L>
 where
     I: Clone + Send + Sync,
     L: Label,
@@ -32,23 +30,33 @@ where
     fn get(&self, index: usize) -> Option<Labeled<I, L>> {
         self.items.get(index).cloned()
     }
+
     fn len(&self) -> usize {
         self.items.len()
     }
+
 }
 
-impl<I, L: Label> InMemDataset<I, L>
+impl<I, L> InMemDataset<I, L>
 where
-    I: Clone + DeserializeOwned,
+    I: Clone + Send + Sync + DeserializeOwned,
     L: Label,
 {
     /// Create from a dataset. All items are loaded in memory.
     pub fn from_dataset(dataset: &impl Dataset<I, L>) -> Self {
-        let items: Vec<Labeled<I, L>> = dataset.iter().collect();
+        let len = dataset.len();
+        let mut items = Vec::with_capacity(len);
+
+        for index in 0..len {
+            if let Some(item) = dataset.get(index) {
+                items.push(item);
+            }
+        }
+
         Self::new(items)
     }
 
-    /// Create from a json rows filei (one json per line).
+    /// Create from a json rows file (one json per line).
     ///
     /// [Supported field types](https://docs.rs/serde_json/latest/serde_json/value/enum.Value.html)
     pub fn from_json_rows<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
@@ -57,13 +65,11 @@ where
         let mut items = Vec::new();
 
         for line in reader.lines() {
-            let item = serde_json::from_str(line.unwrap().as_str()).unwrap();
+            let item = serde_json::from_str(line?.as_str()).unwrap();
             items.push(Labeled::<I, L>::new(item));
         }
 
-        let dataset = Self::new(items);
-
-        Ok(dataset)
+        Ok(Self::new(items))
     }
 
     /// Create from a csv file.
@@ -80,7 +86,6 @@ where
         builder: &csv::ReaderBuilder,
     ) -> Result<Self, std::io::Error> {
         let mut rdr = builder.from_path(path)?;
-
         let mut items = Vec::new();
 
         for result in rdr.deserialize() {
@@ -88,17 +93,14 @@ where
             items.push(Labeled::<I, L>::new(item));
         }
 
-        let dataset = Self::new(items);
-
-        Ok(dataset)
+        Ok(Self::new(items))
     }
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::{SqliteDataset, test_data};
+    use crate::{test_data, SqliteDataset};
 
     use rstest::{fixture, rstest};
     use serde::{Deserialize, Serialize};
@@ -108,7 +110,7 @@ mod tests {
     const CSV_FILE: &str = "tests/data/dataset.csv";
     const CSV_FMT_FILE: &str = "tests/data/dataset-fmt.csv";
 
-    type SqlDs = SqliteDataset<Sample>;
+    type SqlDs = SqliteDataset<Sample, A>;
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub struct Sample {
@@ -139,59 +141,81 @@ mod tests {
         let non_existing_record_index: usize = 10;
         let record_index: usize = 0;
 
-        assert_eq!(train_dataset.get(non_existing_record_index), None);
-        assert_eq!(dataset.get(record_index).unwrap().column_str, "HI1");
+        assert_eq!(train_dataset.get(non_existing_record_index).unwrap(), None);
+        assert_eq!(declassify(dataset.get(record_index).unwrap()).column_str, "HI1");
     }
 
     #[test]
     pub fn from_json_rows() {
-        let dataset = InMemDataset::<Sample>::from_json_rows(JSON_FILE).unwrap();
+        let dataset = InMemDataset::<Sample, A>::from_json_rows(JSON_FILE).unwrap();
 
         let non_existing_record_index: usize = 10;
         let record_index: usize = 1;
 
         assert_eq!(dataset.get(non_existing_record_index), None);
-        assert_eq!(dataset.get(record_index).unwrap().column_str, "HI2");
-        assert!(!dataset.get(record_index).unwrap().column_bool);
+
+        let item = dataset.get(record_index).unwrap();
+        assert_eq!(item.column_str, "HI2");
+        assert!(!item.column_bool);
     }
 
     #[test]
     pub fn from_csv_rows() {
         let rdr = csv::ReaderBuilder::new();
-        let dataset = InMemDataset::<SampleCsv>::from_csv(CSV_FILE, &rdr).unwrap();
+        let dataset = InMemDataset::<SampleCsv, A>::from_csv(CSV_FILE, &rdr).unwrap();
 
         let non_existing_record_index: usize = 10;
         let record_index: usize = 1;
 
-        assert_eq!(dataset.get(non_existing_record_index), None);
-        assert_eq!(dataset.get(record_index).unwrap().column_str, "HI2");
-        assert_eq!(dataset.get(record_index).unwrap().column_int, 1);
-        assert!(!dataset.get(record_index).unwrap().column_bool);
-        assert_eq!(dataset.get(record_index).unwrap().column_float, 1.0);
+        let item = dataset.get(non_existing_record_index);
+
+        assert_eq!(
+            item,
+            None,
+        );
+
+        let item = dataset.get(record_index).unwrap();
+        assert_eq!(item.column_str, "HI2");
+        assert_eq!(item.column_int, 1);
+        assert!(!item.column_bool);
+        assert_eq!(item.column_float, 1.0);
     }
 
     #[test]
     pub fn from_csv_rows_fmt() {
         let mut rdr = csv::ReaderBuilder::new();
         let rdr = rdr.delimiter(b' ').has_headers(false);
-        let dataset = InMemDataset::<SampleCsv>::from_csv(CSV_FMT_FILE, rdr).unwrap();
+        let dataset = InMemDataset::<SampleCsv, A>::from_csv(CSV_FMT_FILE, rdr).unwrap();
 
         let non_existing_record_index: usize = 10;
         let record_index: usize = 1;
 
-        assert_eq!(dataset.get(non_existing_record_index), None);
-        assert_eq!(dataset.get(record_index).unwrap().column_str, "HI2");
-        assert_eq!(dataset.get(record_index).unwrap().column_int, 1);
-        assert!(!dataset.get(record_index).unwrap().column_bool);
-        assert_eq!(dataset.get(record_index).unwrap().column_float, 1.0);
+        assert_eq!(
+            dataset.get(non_existing_record_index),
+            None,
+        );
+        let item = dataset.get(record_index).unwrap();
+        assert_eq!(item.column_str, "HI2");
+        assert_eq!(item.column_int, 1);
+        assert!(!item.column_bool);
+        assert_eq!(item.column_float, 1.0);
     }
 
     #[test]
     pub fn given_in_memory_dataset_when_iterate_should_iterate_though_all_items() {
         let items_original = test_data::string_items();
-        let dataset = InMemDataset::new(items_original.clone());
+        let labeled_items = items_original
+            .iter()
+            .cloned()
+            .map(Labeled::<String, A>::new)
+            .collect::<Vec<_>>();
 
-        let items: Vec<String> = dataset.iter().collect();
+        let dataset = InMemDataset::<String, A>::new(labeled_items);
+
+        let items: Vec<String> = dataset
+            .iter()
+            .filter_map(|item| item)
+            .collect();
 
         assert_eq!(items_original, items);
     }

@@ -1,6 +1,8 @@
 use burn::tensor::Device;
 use simple_regression::{inference, training};
 
+use typing_rules::*;
+
 static ARTIFACT_DIR: &str = "/tmp/burn-example-regression";
 
 #[cfg(feature = "flex")]

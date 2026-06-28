@@ -238,6 +238,10 @@ where
     fn len(&self) -> usize {
         self.len
     }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 /// Fetch the column names and the number of rows from the database.
@@ -644,7 +648,8 @@ mod tests {
 
     use super::*;
 
-    type SqlDs = SqliteDataset<Sample>;
+    type TestLabel = A;
+    type SqlDs = SqliteDataset<Sample, TestLabel>;
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub struct Sample {
@@ -657,7 +662,7 @@ mod tests {
 
     #[fixture]
     fn train_dataset() -> SqlDs {
-        SqliteDataset::<Sample>::from_db_file("tests/data/sqlite-dataset.db", "train").unwrap()
+        SqliteDataset::<Sample, TestLabel>::from_db_file("tests/data/sqlite-dataset.db", "train").unwrap()
     }
 
     #[rstest]
@@ -668,6 +673,7 @@ mod tests {
     #[rstest]
     pub fn get_some(train_dataset: SqlDs) {
         let item = train_dataset.get(0).unwrap();
+        let item = item.declassify_ref();
         assert_eq!(item.column_str, "HI1");
         assert_eq!(item.column_bytes, vec![55, 231, 159]);
         assert_eq!(item.column_int, 1);
@@ -709,7 +715,7 @@ mod tests {
         // Test with existing file
         let storage = SqliteDatasetStorage::from_file("tests/data/sqlite-dataset.db");
         assert!(storage.exists());
-        let result = storage.reader::<Sample>("train");
+        let result = storage.reader::<Sample, TestLabel>("train");
         assert!(result.is_ok());
         let train = result.unwrap();
         assert_eq!(train.len(), 2);
@@ -807,9 +813,9 @@ mod tests {
         // Should fail because the writer is completed
         assert!(result.is_err());
 
-        let dataset = SqliteDataset::<Complex>::from_db_file(writer.db_file, "train").unwrap();
+        let dataset = SqliteDataset::<Complex, TestLabel>::from_db_file(writer.db_file, "train").unwrap();
 
-        let fetched_item = dataset.get(0).unwrap();
+        let fetched_item = declassify(dataset.get(0).unwrap());
         assert_eq!(fetched_item, new_item);
         assert_eq!(dataset.len(), 1);
     }
@@ -848,8 +854,8 @@ mod tests {
             .expect("Should set completed successfully");
 
         let train =
-            SqliteDataset::<Complex>::from_db_file(writer.db_file.clone(), "train").unwrap();
-        let test = SqliteDataset::<Complex>::from_db_file(writer.db_file, "test").unwrap();
+            SqliteDataset::<Complex, TestLabel>::from_db_file(writer.db_file.clone(), "train").unwrap();
+        let test = SqliteDataset::<Complex, TestLabel>::from_db_file(writer.db_file, "test").unwrap();
 
         assert_eq!(train.len(), record_count as usize / 2);
         assert_eq!(test.len(), record_count as usize / 2);

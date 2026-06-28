@@ -12,6 +12,8 @@ use crate::{
     model::RegressionModelConfig,
 };
 
+use typing_rules::*;
+
 pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
     let device = device.into();
     let record = NoStdTrainingRecorder::new()
@@ -22,16 +24,16 @@ pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
         .init(&device)
         .load_record(record);
 
-    // Use a sample of 1000 items from the test split
-    let dataset = HousingDataset::test();
-    let items: Vec<HousingDistrictItem> = dataset.iter().take(1000).collect();
+    // Use a sample of 1000 labeled items from the test split.
+    let dataset = HousingDataset::<A>::test();
+    let items: Vec<Labeled<HousingDistrictItem, A>> = dataset.iter().take(1000).collect();
 
     let batcher = HousingBatcher::new(&device);
     let batch = batcher.batch(items.clone(), &device);
     let predicted = model.forward(batch.inputs);
     let targets = batch.targets;
 
-    // Display the predicted vs expected values
+    // Display the predicted vs expected values.
     let predicted = predicted.squeeze_dim::<1>(1).into_data();
     let expected = targets.into_data();
 
@@ -52,6 +54,6 @@ pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
         )
         .display();
 
-    // Print a single numeric value as an example
+    // Print a single numeric value as an example.
     println!("Predicted {} Expected {}", points[0].0, points[0].1);
 }
