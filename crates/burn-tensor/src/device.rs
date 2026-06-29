@@ -138,8 +138,11 @@ impl Device {
         }
     }
 
-    /// Crate-internal borrow of the underlying dispatch device.
-    pub(crate) fn as_dispatch(&self) -> &DispatchDevice {
+    /// Borrow the underlying [`DispatchDevice`].
+    ///
+    /// The inverse of [`Device::new`]. Useful to backend-extension authors who need to dispatch on
+    /// the concrete backend variant (e.g. matching `DispatchDevice::Remote(_)`).
+    pub fn as_dispatch(&self) -> &DispatchDevice {
         self.blob.as_ref()
     }
 
@@ -487,6 +490,22 @@ impl Device {
     /// Returns an [`ExecutionError`] if an operation failed to execute.
     pub fn sync(&self) -> Result<(), ExecutionError> {
         Dispatch::sync(self.as_dispatch())
+    }
+
+    /// Flush the device's pending operations, handing them off for execution without waiting
+    /// for them to complete.
+    ///
+    /// Backends that buffer work hold registered operations in a local queue until enough
+    /// accumulate: the fusion backend batches ops to build optimizations, and the remote backend
+    /// batches them before sending them over the network. `flush` forces that queue out now — the
+    /// fusion backend processes its pending optimizations and the remote backend sends its batch to
+    /// the server.
+    ///
+    /// Unlike [`sync`](Self::sync), this does not block on results — it only ensures buffered
+    /// operations are dispatched instead of sitting idle. Eager backends, which execute each
+    /// operation as it is registered, have nothing buffered and treat this as a no-op.
+    pub fn flush(&self) {
+        Dispatch::flush(self.as_dispatch())
     }
 
     /// Seeds the random number generator for this device.

@@ -7,7 +7,7 @@ use burn_backend::{
     Backend, BackendTypes, DType, DeviceOps, ExecutionError,
     tensor::{BoolTensor, Device, FloatTensor, IntTensor, QuantizedTensor},
 };
-use burn_ir::{BackendIr, OperationIr, TensorHandle};
+use burn_ir::{BackendIr, HandleContainer, OperationIr, TensorHandle, TensorIr};
 use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 
@@ -188,6 +188,39 @@ pub trait FusionRuntime: Send + Sync + Sized + core::fmt::Debug + 'static {
 
     /// The list of fusers that will be used to optimize the computational graph.
     fn fusers(device: Self::FusionDevice) -> Vec<Box<dyn OperationFuser<Self::Optimization>>>;
+
+    /// Create a cross-stream alias of `handle` to register under a fresh tensor id.
+    ///
+    /// Called by [`MultiStream::tag_shared_view`](crate::stream::MultiStream::tag_shared_view) when
+    /// a tensor is shared from one stream to another. The new handle must be an *independent*
+    /// container entry over the *same* backing buffer, so that consuming one alias (a `ReadWrite`
+    /// last-use that frees its handle) never frees the buffer out from under the other stream.
+    ///
+    /// The default just clones the handle, which is exactly right for local backends whose handle
+    /// is an `Arc`-style refcount over a device buffer — the clone is a new map entry sharing the
+    /// allocation. Backends whose handle is a *remote* resource (the router/remote backend, where
+    /// the handle is a thin id pointing at a server-side tensor) must override this: a bare clone
+    /// keeps the same server id, so all aliases collapse to one server handle and the first consume
+    /// frees it for everyone. Such backends allocate a fresh server id aliasing the same buffer.
+    fn alias_handle(handle: &Self::FusionHandle) -> Self::FusionHandle {
+        handle.clone()
+    }
+
+    /// Reclaim a `ReadWrite` (last-use) handle as the fusion engine drains a block
+    /// ([`drain_queue`](crate::stream::queue)).
+    ///
+    /// The default removes the container entry; the handle's own `Drop` releases the backend
+    /// resource. This is correct for local backends, whose handle is an `Arc`-style buffer refcount.
+    ///
+    /// A runtime whose handle is a *remote* resource must override this. The router/remote backend
+    /// frees a tensor by registering an `OperationIr::Drop`, but the drained block **already** freed
+    /// it server-side — every consumed op (including any `Drop`) is replayed on the server, popping
+    /// its `ReadWrite` inputs. So letting the handle's `Drop` run here registers a *second*,
+    /// redundant `Drop` for the same id (the "unfused drop" traffic). The override removes the
+    /// container entry while suppressing that re-registration.
+    fn free_handle(handles: &mut HandleContainer<Self::FusionHandle>, tensor: &TensorIr) {
+        handles.free(tensor);
+    }
 }
 
 /// Trait that allows an existing [backend](Backend) to specify graph optimizations using
