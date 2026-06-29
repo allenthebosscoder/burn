@@ -49,7 +49,8 @@ impl<LC: LearningComponentsTypes, L: Label> SingleDeviceValidEpoch<LC, L> {
             iteration += 1;
 
             let item = fcall!(InferenceStep::step(&model, item));
-            let labeled_event = item.map(|o| LearnerEvent::ProcessedItem(TrainingItem::new(o, progress, Some(iteration), None)));
+            let labeled_training_item = fcall!(TrainingItem::new(item, progress, Some(iteration), None));
+            let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
             fcall!(EventProcessorTraining::process_valid(processor, labeled_event));
 
             if interrupter.should_stop() {
@@ -112,8 +113,8 @@ impl<LC: LearningComponentsTypes, L: Label> SingleDeviceTrainEpoch<LC, L> {
                 None => { fcall!(Learner::optimizer_step(&mut *learner, labeled_grads)); }
             }
 
-            let labeled_event = labeled_item
-                .map(|o| LearnerEvent::ProcessedItem(TrainingItem::new(o, progress, Some(iteration), Some(learner.lr_current()))));
+            let labeled_training_item = fcall!(TrainingItem::new(labeled_item, progress, Some(iteration), Some(learner.lr_current())));
+            let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
             fcall!(EventProcessorTraining::process_train(processor, labeled_event));
 
             if interrupter.should_stop() {

@@ -49,7 +49,8 @@ impl<LC: LearningComponentsTypes, L: Label> DdpValidEpoch<LC, L> {
             iteration += 1;
 
             let item = fcall!(InferenceStep::step(&model, item));
-            let labeled_event = item.map(|o| LearnerEvent::ProcessedItem(TrainingItem::new(o, progress, Some(iteration), None)));
+            let labeled_training_item = fcall!(TrainingItem::new(item, progress, Some(iteration), None));
+            let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
             fcall!(EventProcessorTraining::process_valid(processor, labeled_event));
 
             if interrupter.should_stop() {
@@ -121,9 +122,8 @@ impl<LC: LearningComponentsTypes, L: Label> DdpTrainEpoch<LC, L> {
                 }
             }
 
-            let labeled_event = labeled_item
-                .map(|o| TrainingItem::new(o, progress, Some(iteration), Some(learner.lr_current())))
-                .map(LearnerEvent::ProcessedItem);
+            let labeled_training_item = fcall!(TrainingItem::new(labeled_item, progress, Some(iteration), Some(learner.lr_current())));
+            let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
 
             {
                 let mut processor = processor.lock().unwrap();

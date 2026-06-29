@@ -145,8 +145,16 @@ impl<L: Label> Batcher<HousingDistrictItem, HousingBatch, L> for HousingBatcher 
     fn batch(&self, items: Vec<Labeled<HousingDistrictItem, L>>, device: &Device) -> Labeled<HousingBatch, L> {
         let inputs = items.iter().copied()
             .map(|item| fcall!(Tensor::<1>::from_floats(
-                [item.median_income, item.house_age, item.avg_rooms, item.avg_bedrooms,
-                 item.population, item.avg_occupancy, item.latitude, item.longitude],
+                [
+                    item.median_income, 
+                    item.house_age, 
+                    item.avg_rooms, 
+                    item.avg_bedrooms,
+                    item.population, 
+                    item.avg_occupancy, 
+                    item.latitude, 
+                    item.longitude,
+                ],
                 device
             ).unsqueeze()))
             .reduce(|a, b| fcall!(Tensor::cat(vec![a, b], 0)))

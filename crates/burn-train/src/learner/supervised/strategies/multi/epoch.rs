@@ -105,7 +105,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
                     .map(|o| (o.grads.to_device(&device_main, &learner.model()), o.item))
                     .split();
                 fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
-                fcall!(Vec::push(&mut progress_items, labeled_item));
+                progress_items.push(labeled_item);
             }
 
             accumulation_current += 1;
@@ -118,14 +118,9 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
 
             for item in progress_items {
                 iteration += 1;
-                let item = TrainingItem::new(
-                    item,
-                    progress.clone(),
-                    Some(iteration),
-                    Some(learner.lr_current()),
-                );
-
-                event_processor.process_train(LearnerEvent::ProcessedItem(item));
+                let labeled_training_item = fcall!(TrainingItem::new(item, progress.clone(), Some(iteration), Some(learner.lr_current())));
+                let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
+                fcall!(EventProcessorTraining::process_train(event_processor, labeled_event));
             }
 
             if interrupter.should_stop() {
@@ -176,7 +171,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
                 let accumulator = &mut accumulators[item.device_id];
                 let (labeled_grads, labeled_item) = item.output.map(|o| (o.grads, o.item)).split();
                 fcall!(GradientsAccumulator::accumulate(accumulator, &learner.model(), labeled_grads));
-                fcall!(Vec::push(&mut progress_items, labeled_item));
+                progress_items.push(labeled_item);
             }
 
             accumulation_current += 1;
@@ -193,14 +188,9 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
 
             for item in progress_items {
                 iteration += 1;
-                let item = TrainingItem::new(
-                    item,
-                    progress.clone(),
-                    Some(iteration),
-                    Some(learner.lr_current()),
-                );
-
-                event_processor.process_train(LearnerEvent::ProcessedItem(item));
+                let labeled_training_item = fcall!(TrainingItem::new(item, progress.clone(), Some(iteration), Some(learner.lr_current())));
+                let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
+                fcall!(EventProcessorTraining::process_train(event_processor, labeled_event));
             }
 
             if interrupter.should_stop() {

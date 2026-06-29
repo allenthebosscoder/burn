@@ -27,6 +27,52 @@ Three other primitives are used at IFC boundaries:
   `Labeled<T, L>`, consuming the label entirely. Used at the boundary where IFC-tracked code
   hands off to code that doesn't know about labels (e.g., the optimizer).
 
+### How `__chain` and `__chain_ref` work
+
+You will see `__chain` and `__chain_ref` in expanded macro output and error messages — they are
+the internal building blocks that `fcall!` and `mcall!` generate. Think of them as "suspend the
+label outside, pass the raw value into a closure, then reattach the label to whatever the closure
+produces":
+
+```rust
+// __chain (owned — takes value BY MOVE, consumes the Labeled wrapper):
+// Used when fcall! sees a plain argument  →  fcall!(Func::f(arg))
+let result: Labeled<R, L_joined> = labeled_x.__chain(|x: T| {
+    // x is the raw T — the label is "waiting outside the closure"
+    Labeled::new(something(x))  // inner call produces Labeled<R, Public>
+});
+// The __chain impl then joins: L_from_labeled_x ∨ Public = L_from_labeled_x
+
+// __chain_ref (borrowed — closure gets &T, labeled_x is NOT consumed):
+// Used when fcall! sees &arg  →  fcall!(Func::f(&arg))  or mcall! borrows the receiver
+let result: Labeled<R, L_joined> = labeled_x.__chain_ref(|x: &T| {
+    // x is &T — borrow only, label preserved outside
+    Labeled::new(x.some_method())
+});
+```
+
+When `fcall!` is given multiple arguments, it nests the chain calls — one per argument,
+inside-out — so every argument's label is joined into the final result:
+
+```rust
+// fcall!(Func::f(&a, b))  expands to (roughly):
+(a).__chain_ref(|__v0: &TypeA| {  // a is borrowed (&a)
+    (b).__chain(|__v1: TypeB| {   // b is consumed (no &)
+        Labeled::new(Func::f(__v0, __v1))  // call with raw values
+    })
+    // result of inner __chain is Labeled<R, Label_of_b>
+})
+// result of outer __chain_ref is Labeled<R, Label_of_a ∨ Label_of_b>
+```
+
+If either `a` or `b` is not a `Labeled<T, L>` but a plain raw value, the `SecureChain` /
+`SecureChainRef` **blanket traits** handle the call and treat the label as `Public`. A raw arg
+contributes nothing to the join — only the actually-labeled args matter.
+
+The `Join` trait computes the label join (`∨`). For the `Secret`/`Public` lattice used in this
+project: `Secret ∨ Public = Secret`. So one secret input makes the entire output `Secret`,
+which is exactly the property IFC enforces.
+
 ---
 
 ## Changes
@@ -56,31 +102,31 @@ let closure_body = chain.iter().fold(quote! { inner }, |acc, (method, turbofish,
 quote! { { #helper  __mcall_preserve_label(&(#base), |inner| #closure_body) } }
 ```
 
-**After** ([`fg_ifc_library/macros/src/lib.rs:436-492`](fg_ifc_library/macros/src/lib.rs#L436-L492)):
+**After** ([`fg_ifc_library/macros/src/lib.rs:634-689`](fg_ifc_library/macros/src/lib.rs#L634-L689)):
 
 ```rust
 // Split the chain so only the last method's args are individually chained
-let (last_entry, intermediates) = chain.split_last()          // line 436
+let (last_entry, intermediates) = chain.split_last()          // line 634
     .expect("mcall!: method call must have at least one method");
 
 // Generate a name per arg of the last method (__av0, __av1, ...)
-let arg_names: Vec<_> = (0..arg_count)                        // line 452
+let arg_names: Vec<_> = (0..arg_count)                        // line 650
     .map(|i| format_ident!("__av{}", i)).collect();
 
 // Innermost: call the method with unwrapped args, wrap result in Labeled<_, Public>
-let inner_call = quote! {                                      // line 456-468
+let inner_call = quote! {                                      // line 654-666
     ::typing_rules::lattice::Labeled::<_, ::typing_rules::lattice::Public>::new(
         (#intermediate_recv).#last_method(#(#arg_names),*)
     )
 };
 
 // Wrap each arg in its own __chain (inside-out)
-for (arg, name) in last_args.iter().zip(arg_names.iter()).rev() {   // line 472-474
+for (arg, name) in last_args.iter().zip(arg_names.iter()).rev() {   // line 670-672
     body = quote! { (#arg).__chain(|#name| { #body }) };
 }
 
 // Outer: chain the receiver via __chain_ref
-quote! {                                                       // line 484-492
+quote! {                                                       // line 682-689
     {
         use ::typing_rules::function_rewrite::SecureChain;
         use ::typing_rules::function_rewrite::SecureChainRef;
@@ -203,17 +249,18 @@ pub struct MultiTrainOutput<TO, L: Label> {
 ### `src/learner/supervised/strategies/multi/epoch.rs`
 
 **What changed:** Both loops over worker outputs (`run_optim_main` and `run_optim_distr`) now
-use `.map(...).split()` to extract `grads` and `item` from the labeled output, then pass each
-to a `fcall!` call rather than accessing them as raw fields.
+use `.map(...).split()` to extract `grads` and `item` from the labeled output. `labeled_item`
+is pushed directly into `progress_items` (preserving its label), and the second loop uses
+nested `fcall!` calls to build the event and send it to the processor.
 
-**Why ownership is needed here:** `item.output` is `Labeled<TrainOutput<TO>, L>`.
+**Why ownership is needed here (for `.map().split()`):** `item.output` is `Labeled<TrainOutput<TO>, L>`.
 `TrainOutput<TO>` has two fields:
 
 - `grads: GradientsParams` — a collection of GPU gradient tensors. Not `Clone`. The
   `accumulate` function takes it **by value** (consumes it) to merge it into the accumulator
   and free the GPU memory. You cannot borrow it.
-- `item: TO` — the metric output (e.g. loss, accuracy). Needs to be moved into `progress_items`
-  so it can be processed for events after the gradient step.
+- `item: TO` — the metric output (e.g. loss, accuracy). Needs to be collected and processed
+  for events after the gradient step.
 
 Both fields must be moved out of the inner `TrainOutput`. That requires consuming the outer
 `Labeled<TrainOutput<TO>, L>`, which only `.map()` provides — it gives the closure an **owned**
@@ -226,7 +273,14 @@ split one labeled value into **two separately labeled values** (`Labeled<Gradien
 and `Labeled<TO, L>`) so each can be passed to its own `fcall!` call with the label intact.
 That is structural destructuring, not a method call.
 
-**Before/After** ([`src/learner/supervised/strategies/multi/epoch.rs:104-108`](crates/burn-train/src/learner/supervised/strategies/multi/epoch.rs#L104-L108) and [`epoch.rs:177-179`](crates/burn-train/src/learner/supervised/strategies/multi/epoch.rs#L177-L179)):
+**Why `progress_items.push(labeled_item)` and not `fcall!(Vec::push(..., labeled_item))`:**
+`fcall!` unwraps its arguments before calling the function. Using `fcall!(Vec::push(&mut
+progress_items, labeled_item))` would push the raw `TO` (unwrapped from `labeled_item`) into
+`progress_items`, making it `Vec<TO>` — silently dropping the label. Pushing the labeled value
+directly keeps `progress_items: Vec<Labeled<TO, L>>` so the label flows through to the event
+processor.
+
+**Before/After** ([`src/learner/supervised/strategies/multi/epoch.rs:102-129`](crates/burn-train/src/learner/supervised/strategies/multi/epoch.rs#L102-L129) and [`epoch.rs:169-199`](crates/burn-train/src/learner/supervised/strategies/multi/epoch.rs#L169-L199)):
 
 ```rust
 // Before (no IFC)
@@ -235,81 +289,125 @@ for item in items.into_iter() {
     accumulator.accumulate(&learner.model(), grads);
     progress_items.push(item.output.item);
 }
-
-// After — run_optim_main (lines 103-108)
-for item in items.into_iter() {
-    let (labeled_grads, labeled_item) = item.output   // Labeled<TrainOutput<TO>, L>
-        .map(|o| (o.grads.to_device(&device_main, &learner.model()), o.item))
-        //   ↑ consumes Labeled, gives owned TrainOutput — moves both fields into a tuple
-        .split();
-        //   ↑ Labeled<(GradientsParams, TO), L>  →  (Labeled<GradientsParams, L>, Labeled<TO, L>)
-    fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
-    fcall!(Vec::push(&mut progress_items, labeled_item));
+// ...
+for item in progress_items {   // item: TO (raw)
+    event_processor.process_train(LearnerEvent::ProcessedItem(TrainingItem::new(item, ...)));
 }
 
-// After — run_optim_distr, per-device accumulator variant (lines 177-179)
+// After — run_optim_main (lines 102-129)
+for item in items.into_iter() {
+    // item.output: Labeled<TrainOutput<TO>, L>
+    // .map() consumes the Labeled wrapper, gives the closure an owned TrainOutput<TO>
+    //        so we can move out both fields (grads and item) at once.
+    // .split() then takes the Labeled<(GradientsParams, TO), L> tuple and turns it into
+    //          two separate Labeled values — each carrying label L independently.
+    let (labeled_grads, labeled_item) = item.output
+        .map(|o| (o.grads.to_device(&device_main, &learner.model()), o.item))
+        .split();
+    // labeled_grads: Labeled<GradientsParams, L>
+    // labeled_item:  Labeled<TO, L>
+
+    // fcall! unwraps labeled_grads to pass raw GradientsParams to accumulate().
+    // The label is "consumed" here — once gradients enter the accumulator they
+    // are blended across batches and no longer track a single source.
+    fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
+
+    // Push the *labeled* item directly — NOT via fcall!, which would unwrap it first.
+    // This keeps progress_items as Vec<Labeled<TO, L>>, not Vec<TO>.
+    progress_items.push(labeled_item);
+}
+// ... optimizer step (accumulator.grads() is raw — OK since label was consumed above) ...
+for item in progress_items {   // item: Labeled<TO, L> — label intact across the whole loop
+    // Build TrainingItem (wraps the metric output + progress info) — still labeled
+    let labeled_training_item = fcall!(TrainingItem::new(item, progress.clone(), Some(iteration), Some(learner.lr_current())));
+    // Wrap in the event enum variant — still labeled
+    let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
+    // Deliver to the event processor — label enforced at this API boundary
+    fcall!(EventProcessorTraining::process_train(event_processor, labeled_event));
+}
+
+// After — run_optim_distr, per-device accumulator variant (lines 169-199)
+// (Same pattern; grads stay on their originating device rather than being moved to main)
 for item in items.into_iter() {
     let accumulator = &mut accumulators[item.device_id];
     let (labeled_grads, labeled_item) = item.output.map(|o| (o.grads, o.item)).split();
     fcall!(GradientsAccumulator::accumulate(accumulator, &learner.model(), labeled_grads));
-    fcall!(Vec::push(&mut progress_items, labeled_item));
+    progress_items.push(labeled_item);  // direct push — preserves label
+}
+// ...
+for item in progress_items {   // item: Labeled<TO, L>
+    let labeled_training_item = fcall!(TrainingItem::new(item, progress.clone(), Some(iteration), Some(learner.lr_current())));
+    let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
+    fcall!(EventProcessorTraining::process_train(event_processor, labeled_event));
 }
 ```
 
-The label `L` flows intact from the input data through `mcall!(model.step(input))` →
-`MultiTrainOutput.output: Labeled<TrainOutput<TO>, L>` → `.map().split()` →
-`labeled_grads` / `labeled_item` → `fcall!(accumulate(...))` / `fcall!(Vec::push(...))`.
-`progress_items` therefore holds `Vec<Labeled<TO, L>>`, keeping the label alive until the
-event processor boundary.
+The label `L` flows intact: `mcall!(model.step(input))` → `MultiTrainOutput.output:
+Labeled<TrainOutput<TO>, L>` → `.map().split()` → `labeled_grads` / `labeled_item` →
+`fcall!(accumulate(...))` / `progress_items.push(labeled_item)` →
+`fcall!(TrainingItem::new(...))` → `fcall!(LearnerEvent::ProcessedItem(...))` →
+`fcall!(process_train(...))`. The label survives all the way to the event processor.
 
 ---
 
 ### `src/learner/supervised/strategies/ddp/epoch.rs`
 
 **What changed:** Both `DdpTrainEpoch::run` and `DdpValidEpoch::run` now use `fcall!` for the
-train/valid step and then use `.map().split()` (train) or `.map()` (valid) to keep labeled values
-flowing through the rest of the function rather than declassifying immediately.
+train/valid step and then use `.map().split()` (train) or nested `fcall!` (both) to keep labeled
+values flowing through the rest of the function rather than declassifying immediately.
 
-**Before/After — training loop** ([`src/learner/supervised/strategies/ddp/epoch.rs:104-130`](crates/burn-train/src/learner/supervised/strategies/ddp/epoch.rs#L104-L130)):
+**Before/After — training loop** ([`src/learner/supervised/strategies/ddp/epoch.rs:105-131`](crates/burn-train/src/learner/supervised/strategies/ddp/epoch.rs#L105-L131)):
 
 ```rust
 // Before
 let item = learner.train_step(item);   // raw TrainOutput<...>
 // item.grads / item.item accessed directly
 
-// After (lines 104-130)
-let item = fcall!(Learner::train_step(&learner, item));            // Labeled<TrainOutput<...>, L>
+// After (lines 105-131)
+// fcall! borrows &learner (via __chain_ref) and consumes item (via __chain),
+// then calls Learner::train_step with raw values and rewraps the result.
+let item = fcall!(Learner::train_step(&learner, item));  // Labeled<TrainOutput<...>, L>
+
+// .map() consumes the Labeled wrapper so we can move both grads and item out.
+// .split() gives us two independently-labeled values from the tuple.
 let (labeled_grads, labeled_item) = item.map(|o| (o.grads, o.item)).split();
 // labeled_grads: Labeled<GradientsParams, L>
 // labeled_item:  Labeled<TrainingModelOutput, L>
 
 match self.grad_accumulation {
     Some(_) => {
+        // fcall! unwraps labeled_grads to pass raw GradientsParams to accumulate().
         fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
+        // grads from accumulator.grads() are raw — their label was consumed above, which is fine
         // ...
     }
     None => {
-        fcall!(Learner::optimizer_step(&mut learner, labeled_grads));  // label consumed here
+        // &mut *learner is a "reborrow": learner is &mut Learner<LC>, so &mut learner would be
+        // &mut &mut Learner<LC> (double ref). &mut *learner dereferences first → &mut Learner<LC>.
+        fcall!(Learner::optimizer_step(&mut *learner, labeled_grads));  // label consumed here
     }
 }
 
-// labeled_item stays labeled all the way to the event processor
-let labeled_event = labeled_item
-    .map(|o| TrainingItem::new(o, progress, Some(iteration), Some(learner.lr_current())))
-    .map(LearnerEvent::ProcessedItem);
+// labeled_item still carries label L — it was not touched by the optimizer path above.
+// Build the event chain: item → TrainingItem → LearnerEvent, each step still labeled.
+let labeled_training_item = fcall!(TrainingItem::new(labeled_item, progress, Some(iteration), Some(learner.lr_current())));
+let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
+// &mut *processor is the same reborrow trick: processor is Arc<Mutex<...>>, then lock().unwrap()
+// gives &mut SupervisedTrainingEventProcessor<LC> — need &mut *processor to avoid double-ref.
 fcall!(EventProcessorTraining::process_train(&mut *processor, labeled_event));
 ```
 
-**Before/After — validation loop** ([`src/learner/supervised/strategies/ddp/epoch.rs:51-53`](crates/burn-train/src/learner/supervised/strategies/ddp/epoch.rs#L51-L53)):
+**Before/After — validation loop** ([`src/learner/supervised/strategies/ddp/epoch.rs:51-54`](crates/burn-train/src/learner/supervised/strategies/ddp/epoch.rs#L51-L54)):
 
 ```rust
 // Before
 let item = model.step(item);   // raw output
 
-// After (lines 51-53)
-let item = fcall!(InferenceStep::step(&model, item));   // Labeled<Output, L>
-let labeled_event = item
-    .map(|o| LearnerEvent::ProcessedItem(TrainingItem::new(o, progress, Some(iteration), None)));
+// After (lines 51-54)
+// Same pattern as single/epoch.rs: plain model receiver (Public) + labeled item (L) → Labeled<Output, L>
+let item = fcall!(InferenceStep::step(&model, item));
+let labeled_training_item = fcall!(TrainingItem::new(item, progress, Some(iteration), None));
+let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
 fcall!(EventProcessorTraining::process_valid(processor, labeled_event));
 ```
 
@@ -347,7 +445,7 @@ use `fcall!` / `map` / `split` instead of calling `model.step` and `learner.trai
 label must be threaded through every call — the model doesn't declassify the data, it just
 processes it, so the output carries the same sensitivity as the input.
 
-**Before/After — validation loop** ([`src/learner/supervised/strategies/single/epoch.rs:51-53`](crates/burn-train/src/learner/supervised/strategies/single/epoch.rs#L51-L53)):
+**Before/After — validation loop** ([`src/learner/supervised/strategies/single/epoch.rs:51-54`](crates/burn-train/src/learner/supervised/strategies/single/epoch.rs#L51-L54)):
 
 ```rust
 // Before
@@ -355,14 +453,24 @@ let item = model.step(item);  // ❌ item: Labeled<Input, L>, step expects raw I
 let item = TrainingItem::new(item, progress, Some(iteration), None);
 processor.process_valid(LearnerEvent::ProcessedItem(item));
 
-// After (lines 51-53)
-let item = fcall!(InferenceStep::step(&model, item));  // Labeled<Output, L>
-let labeled_event = item
-    .map(|o| LearnerEvent::ProcessedItem(TrainingItem::new(o, progress, Some(iteration), None)));
+// After (lines 51-54)
+// &model is a plain unlabeled value → __chain_ref treats it as Public.
+// item: Labeled<Input, L>            → __chain propagates L.
+// Result label = Public ∨ L = L      → output is Labeled<Output, L>
+let item = fcall!(InferenceStep::step(&model, item));
+
+// progress and Some(iteration) are plain values (Public), None is plain too.
+// item carries label L → result is still Labeled<TrainingItem, L>
+let labeled_training_item = fcall!(TrainingItem::new(item, progress, Some(iteration), None));
+
+// Wrap in the enum variant — plain enum constructor, label flows through
+let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
+
+// Final consumer: fcall! enforces that process_valid receives a Labeled event
 fcall!(EventProcessorTraining::process_valid(processor, labeled_event));
 ```
 
-**Before/After — training loop** ([`src/learner/supervised/strategies/single/epoch.rs:97-117`](crates/burn-train/src/learner/supervised/strategies/single/epoch.rs#L97-L117)):
+**Before/After — training loop** ([`src/learner/supervised/strategies/single/epoch.rs:98-118`](crates/burn-train/src/learner/supervised/strategies/single/epoch.rs#L98-L118)):
 
 ```rust
 // Before
@@ -373,25 +481,39 @@ None => learner.optimizer_step(item.grads),
 let item = TrainingItem::new(item.item, progress, ...);
 processor.process_train(LearnerEvent::ProcessedItem(item));
 
-// After (lines 97-117)
-let item = fcall!(Learner::train_step(&learner, item));        // Labeled<TrainOutput, L>
+// After (lines 98-118)
+// fcall! generates: (&learner).__chain_ref(|__v0| (item).__chain(|__v1| Labeled::new(Learner::train_step(__v0, __v1))))
+// &learner borrows the learner (label Public); item is consumed (label L) → result is Labeled<TrainOutput, L>
+let item = fcall!(Learner::train_step(&learner, item));  // Labeled<TrainOutput, L>
+
+// .map() opens the Labeled wrapper so we can move both fields out at once (grads is not Clone).
+// .split() splits the Labeled<(GradientsParams, TO), L> into two separate Labeled values.
 let (labeled_grads, labeled_item) = item.map(|o| (o.grads, o.item)).split();
+// labeled_grads: Labeled<GradientsParams, L>   ← goes to optimizer (label consumed there)
+// labeled_item:  Labeled<TO, L>                ← goes to event processor (label lives on)
 
 match self.grad_accumulation {
     Some(accumulation) => {
-        // labeled_grads consumed by accumulate, raw grads later come from accumulator.grads()
+        // fcall! unwraps labeled_grads to give accumulate() the raw GradientsParams.
+        // After this call, labeled_grads is consumed; its label is "done".
         fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
         if accumulation <= accumulation_current {
-            let grads = accumulator.grads();       // raw — came from accumulator, not input data
-            learner.optimizer_step(grads);         // raw call is fine here
+            let grads = accumulator.grads();   // raw GradientsParams — blended across many batches,
+            learner.optimizer_step(grads);     // no single source label → raw call is correct
         }
     }
-    None => { fcall!(Learner::optimizer_step(&mut *learner, labeled_grads)); }
-    //        block {} needed: Some arm returns (), fcall returns Labeled<(), L> — must match
+    None => {
+        // block {} required: Some arm's body returns () (plain unit), but fcall! returns
+        // Labeled<(), L>. Both arms of a match must have the same type, so wrap in a block
+        // that also evaluates to () by dropping the Labeled result.
+        fcall!(Learner::optimizer_step(&mut *learner, labeled_grads));
+    }
 }
 
-let labeled_event = labeled_item
-    .map(|o| LearnerEvent::ProcessedItem(TrainingItem::new(o, progress, ...)));
+// labeled_item has been untouched through the whole optimizer section.
+// Chain it through the event structs — each fcall! propagates the label.
+let labeled_training_item = fcall!(TrainingItem::new(labeled_item, progress, Some(iteration), Some(learner.lr_current())));
+let labeled_event = fcall!(LearnerEvent::ProcessedItem(labeled_training_item));
 fcall!(EventProcessorTraining::process_train(processor, labeled_event));
 ```
 
@@ -485,7 +607,7 @@ items — the test data is sensitive in the same way the training data is. So th
 
 **`evaluator/base.rs` — What changed and why:**
 Added `PhantomData<L>` to hold the unused type parameter, and updated the eval loop to use
-`fcall!` + `map` ([`src/evaluator/base.rs:18`](crates/burn-train/src/evaluator/base.rs#L18) and [`base.rs:68-72`](crates/burn-train/src/evaluator/base.rs#L68-L72)):
+nested `fcall!` ([`src/evaluator/base.rs:19`](crates/burn-train/src/evaluator/base.rs#L19) and [`base.rs:69-72`](crates/burn-train/src/evaluator/base.rs#L69-L72)):
 
 ```rust
 // Before — struct
@@ -497,7 +619,7 @@ pub struct Evaluator<EC: EvaluatorComponentTypes, L: Label> {
     // ❌ L is declared but never stored — rustc E0392 "type parameter never used"
 }
 
-// After (line 18-26) — PhantomData anchors the L parameter
+// After (lines 19-27) — PhantomData anchors the L parameter
 pub struct Evaluator<EC: EvaluatorComponentTypes, L: Label> {
     pub(crate) model: EC::Model,
     pub(crate) interrupter: Interrupter,
@@ -511,11 +633,20 @@ let item = self.model.step(item);   // ❌ item: Labeled<Input, L>, step expects
 let item = EvaluationItem::new(item, progress, Some(iteration));
 self.event_processor.process_test(EvaluatorEvent::ProcessedItem(name.clone(), item));
 
-// After (lines 68-72)
-let item = fcall!(InferenceStep::step(&self.model, item));  // Labeled<Output, L>
-let labeled_event = item.map(|o|
-    EvaluatorEvent::ProcessedItem(name.clone(), EvaluationItem::new(o, progress, Some(iteration)))
-);
+// After (lines 69-72)
+// &self.model is plain (unlabeled) — __chain_ref treats it as Public.
+// item: Labeled<Input, L> — __chain propagates L.
+// Result: Labeled<Output, Public ∨ L> = Labeled<Output, L>
+let item = fcall!(InferenceStep::step(&self.model, item));
+
+// Wrap the output in EvaluationItem (adds progress info) — still labeled
+let labeled_eval_item = fcall!(EvaluationItem::new(item, progress, Some(iteration)));
+
+// name.clone() is a plain String (Public label) — does not change the label of labeled_eval_item
+// Result: Labeled<EvaluatorEvent, L>
+let labeled_event = fcall!(EvaluatorEvent::ProcessedItem(name.clone(), labeled_eval_item));
+
+// Deliver to the event processor — the label is enforced at this API boundary
 fcall!(EventProcessorEvaluation::process_test(&mut self.event_processor, labeled_event));
 ```
 

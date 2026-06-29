@@ -67,7 +67,8 @@ impl<EC: EvaluatorComponentTypes, L: Label> Evaluator<EC, L> {
                 iteration += 1;
 
                 let item = fcall!(InferenceStep::step(&self.model, item));
-                let labeled_event = item.map(|o| EvaluatorEvent::ProcessedItem(name.clone(), EvaluationItem::new(o, progress, Some(iteration))));
+                let labeled_eval_item = fcall!(EvaluationItem::new(item, progress, Some(iteration)));
+                let labeled_event = fcall!(EvaluatorEvent::ProcessedItem(name.clone(), labeled_eval_item));
                 fcall!(EventProcessorEvaluation::process_test(&mut self.event_processor, labeled_event));
 
                 if self.interrupter.should_stop() {

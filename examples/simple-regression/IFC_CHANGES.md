@@ -159,10 +159,147 @@ fn main() {
 
 ---
 
+### `fg_ifc_library/macros/src/lib.rs`
+
+**What changed:** Extended `fcall!` with four new argument/expression shapes, so that user
+code can call burn library functions directly without writing any helper wrapper functions.
+
+**Background:** `fcall!` is a proc macro — it runs at compile time and rewrites the code you
+write into a chain of `.__chain()` / `.__chain_ref()` calls. The rewriting works by:
+1. Parsing the expression you wrote (the function call and its arguments)
+2. For each argument that might be a labeled value, wrapping the rest of the expression in a
+   closure that receives the unwrapped inner value
+3. At the innermost level, calling the actual function with all-raw (unwrapped) values and
+   wrapping the result in `Labeled::new(...)`
+
+Before these extensions, `fcall!` could only handle simple argument shapes: plain variables
+(`item`), references (`&self`), and the like. Anything more complex — an array literal, a
+`vec!`, a trailing method call, a struct literal — required writing a helper function whose
+only job was to translate those shapes into something `fcall!` could handle. These extensions
+eliminate that need.
+
+---
+
+#### Extension 1 — Array literal args: `[item.field, ...]`
+
+**Code location:** [`macros/src/lib.rs:221-271`](../../fg_ifc_library/macros/src/lib.rs#L221-L271)
+
+**What it handles:**
+```rust
+fcall!(Tensor::<1>::from_floats(
+    [item.median_income, item.house_age, item.avg_rooms, ...],
+    device
+))
+```
+where `item: Labeled<HousingDistrictItem, L>`.
+
+**How it works:** When an argument is an array literal `[...]`, the macro scans every element
+looking for `base.field` patterns. Each unique `base` variable (e.g. `item` appears 8 times
+but is still one variable) gets one chain entry. The array is then reconstructed with the base
+replaced by the unwrapped variable:
+
+```rust
+// Generated code:
+(item).__chain(|__v0| {
+    Labeled::new(Tensor::<1>::from_floats(
+        [__v0.median_income, __v0.house_age, __v0.avg_rooms, ...],
+        device
+    ))
+})
+```
+
+`__v0` here is `HousingDistrictItem` (the unwrapped inner type), so all the field accesses
+work normally and the array of `f32` is what `Tensor::from_floats` actually receives.
+
+---
+
+#### Extension 2 — Trailing method chain: `func(...).method()`
+
+**Code location:** [`macros/src/lib.rs:149-188`](../../fg_ifc_library/macros/src/lib.rs#L149-L188)
+
+**What it handles:**
+```rust
+fcall!(Tensor::<1>::from_floats([...], device).unsqueeze())
+```
+
+**How it works:** The macro peels trailing method calls off the expression one at a time until
+it finds the base function call. The peeled methods are saved as a "suffix" and appended to
+the raw function call inside `Labeled::new(...)`:
+
+```rust
+// Generated code:
+(item).__chain(|__v0| {
+    Labeled::new(
+        Tensor::<1>::from_floats([__v0.median_income, ...], device).unsqueeze()
+    )
+})
+```
+
+**Why this is needed:** `.unsqueeze()` takes `self` by value — it consumes the tensor.
+`mcall!` only works for `&self` methods because it uses `__chain_ref` internally (giving you
+a `&T`, not an owned `T`). The method-chain extension runs `.unsqueeze()` on the raw unwrapped
+result before the label is put back, so ownership is never an issue.
+
+---
+
+#### Extension 3 — `vec![...]` args
+
+**Code location:** [`macros/src/lib.rs:273-332`](../../fg_ifc_library/macros/src/lib.rs#L273-L332)
+
+**What it handles:**
+```rust
+fcall!(Tensor::cat(vec![a, b], 0))
+```
+where `a, b: Labeled<Tensor<2>, L>`.
+
+**How it works:** Same logic as the array extension, but for the `vec![...]` macro. Elements
+can be plain path variables (`a`, `b`) or field accesses (`a.inputs`, `b.inputs`). Each unique
+base variable gets a chain entry; the inner arg is reconstructed as `vec![__v0, __v1]`:
+
+```rust
+// Generated code:
+(a).__chain(|__v0| {
+    (b).__chain(|__v1| {
+        Labeled::new(Tensor::cat(vec![__v0, __v1], 0))
+    })
+})
+```
+
+`__v0` and `__v1` are raw `Tensor<2>` values, which is exactly what `Tensor::cat` expects.
+
+---
+
+#### Extension 4 — Struct literal: `fcall!(Path { field: val, ... })`
+
+**Code location:** [`macros/src/lib.rs:93-147`](../../fg_ifc_library/macros/src/lib.rs#L93-L147)
+
+**What it handles:**
+```rust
+fcall!(HousingBatch { inputs: labeled_inputs, targets: labeled_targets })
+```
+
+**How it works:** This is a separate early-return path — it never enters the function-call
+handling at all. For each field, the macro creates a chain entry for the field's value and
+builds the inner expression as the struct literal using the unwrapped variable names:
+
+```rust
+// Generated code:
+(labeled_inputs).__chain(|__v0| {
+    (labeled_targets).__chain(|__v1| {
+        Labeled::new(HousingBatch { inputs: __v0, targets: __v1 })
+    })
+})
+```
+
+This lets you construct a struct from labeled fields without any constructor helper function.
+
+---
+
 ### `src/dataset.rs`
 
-**What changed:** Added `L: Label` type parameter to `HousingDataset` and to the `Batcher`
-implementation; replaced `declassify_ref()` with three helper methods called via `fcall!`.
+**What changed:** Added `L: Label` type parameter to `HousingDataset` and the `Batcher`
+implementation; rewrote `batch()` to call burn library functions directly via `fcall!` and
+`mcall!`, eliminating all helper functions.
 
 **Burn context:** In burn, a `Dataset<Item>` is a collection of typed records loaded from a
 source (here, a SQLite-backed HuggingFace dataset). A `Batcher<Item, Batch>` collects a
@@ -173,20 +310,21 @@ so the batcher signature changes to `Vec<Labeled<Item, L>> -> Labeled<Batch, L>`
 **Why `fcall!` and not `declassify_ref()`:** `declassify_ref()` strips the label immediately
 inside the batch loop — earlier than necessary and without any compiler-enforced discipline.
 `fcall!` is the correct boundary: it unwraps each labeled item only at the call site of a
-specific library function (`Tensor::from_floats`, `Tensor::cat`, `normalizer.normalize`),
+specific library function (`Tensor::from_floats`, `Tensor::cat`, `Normalizer::normalize`),
 and the macro automatically rewraps the result with the propagated label.
 
-**Why helper methods:** `fcall!` calls existing functions that don't know about IFC. The three
-helpers (`item_to_tensors`, `cat_pairs`, `build_batch`) each wrap a natural step in the
-batching process that calls into burn library functions. They take and return raw (unlabeled)
-types; `fcall!` is what bridges them into the labeled world.
+**Why no helper functions:** Earlier versions of `fcall!` could only handle simple argument
+shapes, so helper functions like `item_to_tensors` and `cat_pairs` were needed as wrappers.
+After the four macro extensions above, `fcall!` can handle array literals, trailing method
+calls, `vec![...]`, and struct literals directly. The helper functions are no longer needed
+and have been removed — the IFC version of `batch()` now looks almost identical to the
+original non-IFC version.
 
-- `item_to_tensors`: converts one `HousingDistrictItem` into a `(Tensor<2>, Tensor<1>)` pair
-  (inputs as a `[1 × 8]` matrix, target as a 1-element vector)
-- `cat_pairs`: stacks two `(Tensor<2>, Tensor<1>)` pairs along axis 0, building up a batch
-  row by row via `Tensor::cat`
-- `build_batch`: normalizes the stacked input tensor (min–max normalization) and packages the
-  pair into a `HousingBatch`
+**Why `HousingDistrictItem` derives `Copy`:** `batch()` iterates over `items` twice — once
+to build all the input tensors and once to build all the target tensors. When the items are
+`Labeled<HousingDistrictItem, L>`, both the outer `Labeled` and the inner struct need to be
+`Copy` so that `.copied()` on the iterator can cheaply duplicate each item. All fields of
+`HousingDistrictItem` are `f32`, so `Copy` is safe to derive.
 
 **Before** (`src/dataset.rs:58-70`, `src/dataset.rs:143-178`):
 ```rust
@@ -213,8 +351,12 @@ impl Batcher<HousingDistrictItem, HousingBatch> for HousingBatcher {
 }
 ```
 
-**After** ([`src/dataset.rs:59-184`](src/dataset.rs#L59-L184)):
+**After** ([`src/dataset.rs:20-164`](src/dataset.rs#L20-L164)):
 ```rust
+// HousingDistrictItem now derives Copy (all fields are f32)
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct HousingDistrictItem { ... }
+
 // Dataset is now generic over the label
 pub struct HousingDataset<L: Label> {
     dataset: SqliteDataset<HousingDistrictItem, L>,
@@ -222,49 +364,36 @@ pub struct HousingDataset<L: Label> {
 
 impl<L: Label> Dataset<HousingDistrictItem, L> for HousingDataset<L> { ... }
 
-// Three helpers that operate on raw (unlabeled) types
-impl HousingBatcher {
-    fn item_to_tensors(&self, item: HousingDistrictItem, device: &Device) -> (Tensor<2>, Tensor<1>) {
-        let input = Tensor::<1>::from_floats(
-            [item.median_income, item.house_age, item.avg_rooms, item.avg_bedrooms,
-             item.population, item.avg_occupancy, item.latitude, item.longitude],
-            device,
-        ).unsqueeze();
-        let target = Tensor::<1>::from_floats([item.median_house_value], device);
-        (input, target)
-    }
-
-    fn cat_pairs(&self, a: (Tensor<2>, Tensor<1>), b: (Tensor<2>, Tensor<1>)) -> (Tensor<2>, Tensor<1>) {
-        (Tensor::cat(vec![a.0, b.0], 0), Tensor::cat(vec![a.1, b.1], 0))
-    }
-
-    fn build_batch(&self, pair: (Tensor<2>, Tensor<1>), device: &Device) -> HousingBatch {
-        HousingBatch {
-            inputs: self.normalizer.to_device(device).normalize(pair.0),
-            targets: pair.1,
-        }
-    }
-}
-
-// Batcher signature threaded with L; uses fcall! instead of declassify_ref
+// No helper functions — batch() calls burn library functions directly via fcall!/mcall!
 impl<L: Label> Batcher<HousingDistrictItem, HousingBatch, L> for HousingBatcher {
     fn batch(&self, items: Vec<Labeled<HousingDistrictItem, L>>, device: &Device) -> Labeled<HousingBatch, L> {
-        let labeled_pair = items
-            .into_iter()
-            .map(|item| fcall!(HousingBatcher::item_to_tensors(&self, item, device)))
-            .reduce(|a, b| fcall!(HousingBatcher::cat_pairs(&self, a, b)))
+        let inputs = items.iter().copied()
+            .map(|item| fcall!(Tensor::<1>::from_floats(
+                [item.median_income, item.house_age, item.avg_rooms, item.avg_bedrooms,
+                 item.population, item.avg_occupancy, item.latitude, item.longitude],
+                device
+            ).unsqueeze()))
+            .reduce(|a, b| fcall!(Tensor::cat(vec![a, b], 0)))
+            .unwrap();
+        let normalizer = self.normalizer.to_device(device);
+        let inputs = mcall!(normalizer.normalize(inputs));
+
+        let targets = items.iter().copied()
+            .map(|item| fcall!(Tensor::<1>::from_floats([item.median_house_value], device)))
+            .reduce(|a, b| fcall!(Tensor::cat(vec![a, b], 0)))
             .unwrap();
 
-        fcall!(HousingBatcher::build_batch(&self, labeled_pair, device))
+        fcall!(HousingBatch { inputs: inputs, targets: targets })
     }
 }
 ```
 
-Note: `.map(|item| ...)` here is `Iterator::map` (standard Rust iterator), NOT `Labeled::map`.
-The result of each `fcall!` is a `Labeled<(Tensor<2>, Tensor<1>), L>`, and `reduce` folds
-them together by calling `fcall!(cat_pairs(...))` with two labeled owned args. This works
-because the `Label` supertrait now requires `Join<Self, Out = Self>`, making `Join<L, L> = L`
-available for any generic `L`.
+Each `fcall!` call here lands directly on a burn library function — there are no user-written
+intermediaries. The macro extensions handle all the labeled-to-raw translation:
+- `[item.median_income, ...]` — array literal extension unwraps `item` once, passes raw fields
+- `.unsqueeze()` — method chain extension applies the consuming call on the raw tensor
+- `vec![a, b]` — vec extension unwraps each labeled tensor, reconstructs `vec![__v0, __v1]`
+- `HousingBatch { inputs: ..., targets: ... }` — struct literal extension chains both fields
 
 ---
 
@@ -373,13 +502,30 @@ HousingDataset<Secret>                ← data is labeled Secret at source
        │  Vec<Labeled<Item, Secret>>
        ▼
 HousingBatcher::batch()
-  ├── fcall!(item_to_tensors(&self, item, device))   ← fcall! crosses into tensor world
-  │     item unwrapped → raw fields → Tensor::from_floats → rewrap Labeled<pair, Secret>
-  ├── fcall!(cat_pairs(&self, a, b))                 ← two labeled args, same label L
-  │     both a and b unwrapped → Tensor::cat → rewrap Labeled<pair, Secret>
-  │     (works because Label: Join<Self, Out = Self> → Join<L,L> = L for generic L)
-  └── fcall!(build_batch(&self, labeled_pair, device))
-        pair unwrapped → normalize → HousingBatch → rewrap Labeled<HousingBatch, Secret>
+  │
+  ├── items.iter().copied().map(|item|
+  │     fcall!(Tensor::from_floats([item.field, ...], device).unsqueeze())
+  │   )                               ← array extension unwraps item; method-chain
+  │                                      extension applies .unsqueeze() on raw tensor
+  │   .reduce(|a, b|
+  │     fcall!(Tensor::cat(vec![a, b], 0))
+  │   )                               ← vec extension unwraps a and b (labeled Tensor<2>s)
+  │   .unwrap()
+  │   → Labeled<Tensor<2>, Secret>    (stacked input tensor, still labeled)
+  │
+  ├── mcall!(normalizer.normalize(inputs))
+  │                                   ← mcall! borrows inputs via __chain_ref, calls
+  │                                      normalize on the raw tensor, preserves label
+  │   → Labeled<Tensor<2>, Secret>    (normalized inputs)
+  │
+  ├── items.iter().copied().map(|item|
+  │     fcall!(Tensor::from_floats([item.median_house_value], device))
+  │   ).reduce(|a, b| fcall!(Tensor::cat(vec![a, b], 0))).unwrap()
+  │   → Labeled<Tensor<1>, Secret>    (stacked target tensor)
+  │
+  └── fcall!(HousingBatch { inputs: inputs, targets: targets })
+                                      ← struct extension chains both labeled tensors,
+                                         constructs HousingBatch with raw values inside
        │  Labeled<HousingBatch, Secret>
        ▼
 Training loop (burn-train)            ← Secret flows through forward/loss/backward
@@ -398,3 +544,12 @@ declassify(labeled_targets)
        ▼
 Terminal chart                        ← public output
 ```
+
+### `fcall!` extension summary
+
+| Shape written in user code | Extension | What the macro generates |
+|---|---|---|
+| `[item.field1, item.field2, ...]` | Array literal | chains `item` once, rebuilds array as `[__v0.field1, __v0.field2, ...]` |
+| `func(...).method()` | Method chain | peels `.method()`, appends it inside `Labeled::new(func(...).method())` |
+| `vec![a, b]` | vec! macro | chains `a` and `b`, rebuilds as `vec![__v0, __v1]` |
+| `Struct { field: val, ... }` | Struct literal | chains each field value, builds `Struct { field: __v0, ... }` inside `Labeled::new(...)` |
