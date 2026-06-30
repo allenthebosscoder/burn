@@ -50,14 +50,21 @@ mod tests {
         pub struct TestBatcher;
 
         #[cfg(test)]
-        impl<I> Batcher<I, (Vec<I>, Device)> for TestBatcher {
-            fn batch(&self, items: Vec<I>, device: &Device) -> (Vec<I>, Device) {
-                (items, device.clone())
+        impl<I, L> Batcher<I, (Vec<Labeled<I, L>>, Device), L> for TestBatcher
+        where
+            L: Label,
+        {
+            fn batch(
+                &self,
+                items: Vec<Labeled<I, L>>,
+                device: &Device,
+            ) -> Labeled<(Vec<Labeled<I, L>>, Device), L> {
+                Labeled::<(Vec<Labeled<I, L>>, Device), L>::new((items, device.clone()))
             }
         }
 
         let batcher = Arc::new(TestBatcher::new());
-        let dataset = Arc::new(FakeDataset::<String>::new(11));
+        let dataset = Arc::new(FakeDataset::<String, A>::new(11));
 
         #[allow(clippy::arc_with_non_send_sync)]
         let dataloader = Arc::new(BatchDataLoader::new(
@@ -92,20 +99,23 @@ mod tests {
         let mut items_dataloader = HashSet::new();
         let mut items_dataloader_split = HashSet::new();
 
-        for (items, _device) in dataloader.iter() {
+        for batch in dataloader.iter() {
+            let (items, _device) = declassify(batch);
             for item in items {
                 items_dataloader.insert(item);
             }
         }
 
-        for (items, device) in dataloader_1.iter() {
+        for batch in dataloader_1.iter() {
+            let (items, device) = declassify(batch);
             assert_eq!(&device, &device1);
             for item in items {
                 items_dataloader_split.insert(item);
             }
-        }
+        }                                                          
 
-        for (items, device) in dataloader_2.iter() {
+        for batch in dataloader_2.iter() {
+            let (items, device) = declassify(batch);
             assert_eq!(&device, &device2);
             for item in items {
                 items_dataloader_split.insert(item);

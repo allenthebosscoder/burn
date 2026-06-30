@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn test_shuffled_dataset() {
-        let dataset = FakeDataset::<String>::new(27);
+        let dataset = FakeDataset::<String, A>::new(27);
         let source_items = dataset.iter().collect::<Vec<_>>();
 
         let seed = 42;

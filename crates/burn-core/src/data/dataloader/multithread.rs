@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn test_multi_thread_batch_dataloader() {
         let batcher = Arc::new(TestBatcher::new());
-        let dataset = Arc::new(FakeDataset::<String>::new(27));
+        let dataset = Arc::new(FakeDataset::<String, A>::new(27));
         let dataloader_single_thread = BatchDataLoader::new(
             Box::new(FixBatchStrategy::new(5)),
             dataset.clone(),
@@ -357,7 +357,13 @@ mod tests {
 
         {
             // Unshuffled multithreaded loader
-            let dataset = Arc::new(InMemDataset::new(items.clone()));
+            let labeled_items = items
+                .iter()
+                .cloned()
+                .map(Labeled::<usize, A>::new)
+                .collect::<Vec<_>>();
+
+            let dataset = Arc::new(InMemDataset::<usize, A>::new(labeled_items));
             let batcher = Arc::new(TestBatcher::new());
 
             let loader = MultiThreadDataLoader::new(
@@ -383,7 +389,13 @@ mod tests {
 
         {
             // Shuffled multithreaded loader
-            let dataset = Arc::new(InMemDataset::new(items.clone()));
+            let labeled_items = items
+                .iter()
+                .cloned()
+                .map(Labeled::<usize, A>::new)
+                .collect::<Vec<_>>();
+
+            let dataset = Arc::new(InMemDataset::<usize, A>::new(labeled_items));
             let batcher = Arc::new(TestBatcher::new());
 
             let loader = MultiThreadDataLoader::new(
@@ -411,7 +423,7 @@ mod tests {
     #[test]
     fn test_multi_thread_batch_dataloader_incomplete_batches() {
         let batcher = Arc::new(TestBatcher::new());
-        let dataset = Arc::new(FakeDataset::<String>::new(27));
+        let dataset = Arc::new(FakeDataset::<String, A>::new(27));
         let dataloader_single_thread = BatchDataLoader::new(
             Box::new(FixBatchStrategy::new(5)),
             dataset.clone(),

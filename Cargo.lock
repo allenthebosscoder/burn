@@ -1225,6 +1225,7 @@ dependencies = [
  "derive-new",
  "dirs",
  "log",
+ "macros",
  "nvml-wrapper",
  "rand 0.10.1",
  "ratatui",
@@ -1236,6 +1237,7 @@ dependencies = [
  "tracing-appender",
  "tracing-core",
  "tracing-subscriber",
+ "typing_rules",
  "unicode-width",
 ]
 

@@ -7,6 +7,7 @@ use crate::{
 use burn_core::data::dataloader::Progress;
 use burn_core::module::AutodiffModule;
 use burn_optim::GradientsAccumulator;
+use typing_rules::*;
 
 /// A validation epoch.
 #[derive(new)]
@@ -46,7 +47,7 @@ impl<LC: LearningComponentsTypes> SingleDeviceValidEpoch<LC> {
             let progress = iterator.progress();
             iteration += 1;
 
-            let item = model.step(item);
+            let item = model.step(declassify(item));
             let item = TrainingItem::new(item, progress, Some(iteration), None);
 
             processor.process_valid(LearnerEvent::ProcessedItem(item));
@@ -93,7 +94,7 @@ impl<LC: LearningComponentsTypes> SingleDeviceTrainEpoch<LC> {
             log::info!("Iteration {iteration}");
 
             let progress = iterator.progress();
-            let item = learner.train_step(item);
+            let item = learner.train_step(declassify(item));
 
             match self.grad_accumulation {
                 Some(accumulation) => {

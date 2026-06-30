@@ -23,7 +23,12 @@ pub struct TestBatcher;
 
 #[cfg(test)]
 impl<I, L: Label> Batcher<I, Vec<I>, L> for TestBatcher {
-    fn batch(&self, items: Vec<Labeled<I, L>>, _device: &Device) -> Vec<Labeled<I, L>> {
-        items
+    fn batch(&self, items: Vec<Labeled<I, L>>, _device: &Device) -> Labeled<Vec<I>, L> {
+        let items = items
+            .into_iter()
+            .map(declassify)
+            .collect::<Vec<I>>();
+
+        Labeled::<Vec<I>, L>::new(items)
     }
 }

@@ -30,7 +30,8 @@ pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
 
     let batcher = HousingBatcher::new(&device);
     let batch = batcher.batch(items.clone(), &device);
-    let predicted = model.forward(batch.inputs);
+    let batch = batch;
+    let predicted = fcall!(model.forward(batch.inputs));
     let targets = batch.targets;
 
     // Display the predicted vs expected values.

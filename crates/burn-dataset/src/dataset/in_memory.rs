@@ -141,7 +141,7 @@ mod tests {
         let non_existing_record_index: usize = 10;
         let record_index: usize = 0;
 
-        assert_eq!(train_dataset.get(non_existing_record_index).unwrap(), None);
+        assert!(train_dataset.get(non_existing_record_index).is_none());
         assert_eq!(declassify(dataset.get(record_index).unwrap()).column_str, "HI1");
     }
 
@@ -152,9 +152,9 @@ mod tests {
         let non_existing_record_index: usize = 10;
         let record_index: usize = 1;
 
-        assert_eq!(dataset.get(non_existing_record_index), None);
+        assert!(dataset.get(non_existing_record_index).is_none());
 
-        let item = dataset.get(record_index).unwrap();
+        let item = declassify(dataset.get(record_index).unwrap());
         assert_eq!(item.column_str, "HI2");
         assert!(!item.column_bool);
     }
@@ -169,12 +169,9 @@ mod tests {
 
         let item = dataset.get(non_existing_record_index);
 
-        assert_eq!(
-            item,
-            None,
-        );
+        assert!(item.is_none());
 
-        let item = dataset.get(record_index).unwrap();
+        let item = declassify(dataset.get(record_index).unwrap());
         assert_eq!(item.column_str, "HI2");
         assert_eq!(item.column_int, 1);
         assert!(!item.column_bool);
@@ -190,11 +187,8 @@ mod tests {
         let non_existing_record_index: usize = 10;
         let record_index: usize = 1;
 
-        assert_eq!(
-            dataset.get(non_existing_record_index),
-            None,
-        );
-        let item = dataset.get(record_index).unwrap();
+        assert!(dataset.get(non_existing_record_index).is_none());
+        let item = declassify(dataset.get(record_index).unwrap());
         assert_eq!(item.column_str, "HI2");
         assert_eq!(item.column_int, 1);
         assert!(!item.column_bool);
@@ -214,7 +208,7 @@ mod tests {
 
         let items: Vec<String> = dataset
             .iter()
-            .filter_map(|item| item)
+            .map(declassify)
             .collect();
 
         assert_eq!(items_original, items);

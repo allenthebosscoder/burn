@@ -4,6 +4,7 @@ use burn_core::tensor::{Device, Shape, TensorData};
 use image::{DynamicImage, ImageBuffer, Luma, Rgb};
 
 use burn_core::tensor::{Bool, Int};
+use typing_rules::*;
 
 #[allow(unused)]
 #[cfg(all(

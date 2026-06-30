@@ -56,7 +56,7 @@ pub struct HousingDistrictItem {
 }
 
 pub struct HousingDataset<L: Label> {
-    dataset: SqliteDataset<HousingDistrictItem, L>,
+    dataset: Labeled<SqliteDataset<HousingDistrictItem>, L>,
 }
 
 impl<L> Dataset<HousingDistrictItem, L> for HousingDataset<L>
@@ -84,7 +84,7 @@ impl<L> HousingDataset<L> where L: Label, {
     }
 
     pub fn new(split: &str) -> Self {
-        let dataset: SqliteDataset<HousingDistrictItem, L> =
+        let dataset: Labeled<SqliteDataset<HousingDistrictItem, L>, L> =
             HuggingfaceDatasetLoader::new("gvlassis/california_housing")
                 .dataset(split)
                 .unwrap();
@@ -141,13 +141,13 @@ impl HousingBatcher {
     }
 }
 
-impl<L> Batcher<Labeled<HousingDistrictItem, L>, HousingBatch> for HousingBatcher where L: Label, {
-    fn batch(&self, items: Vec<Labeled<HousingDistrictItem, L>>, device: &Device) -> HousingBatch {
+impl Batcher<HousingDistrictItem, HousingBatch, A> for HousingBatcher {
+    fn batch(&self, items: Vec<Labeled<HousingDistrictItem, A>>, device: &Device) -> Labeled<HousingBatch, A> {
+        let raw_items = items.into_iter().map(declassify).collect::<Vec<_>>();
         let mut inputs: Vec<Tensor<2>> = Vec::new();
 
-        for item in items.iter() {
-            /// let item = item.declassify_ref();
-            let input_tensor = mcall(Tensor::<1>::from_floats(
+        for item in raw_items.iter() {
+            let input_tensor = Tensor::<1>::from_floats(
                 [
                     item.median_income,
                     item.house_age,
@@ -159,7 +159,7 @@ impl<L> Batcher<Labeled<HousingDistrictItem, L>, HousingBatch> for HousingBatche
                     item.longitude,
                 ],
                 device,
-            ));
+            );
 
             inputs.push(input_tensor.unsqueeze());
         }
@@ -167,16 +167,13 @@ impl<L> Batcher<Labeled<HousingDistrictItem, L>, HousingBatch> for HousingBatche
         let inputs = Tensor::cat(inputs, 0);
         let inputs = self.normalizer.to_device(device).normalize(inputs);
 
-        let targets = items
+        let targets = raw_items
             .iter()
-            .map(|item| {
-                /// let item = item.declassify_ref();
-                mcall(Tensor::<1>::from_floats([item.median_house_value], device))
-            })
+            .map(|item| Tensor::<1>::from_floats([item.median_house_value], device))
             .collect();
 
         let targets = Tensor::cat(targets, 0);
 
-        HousingBatch { inputs, targets }
+        Labeled::<HousingBatch, A>::new(HousingBatch { inputs, targets })
     }
 }

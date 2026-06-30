@@ -213,6 +213,52 @@ impl<T, L: Label> Labeled<Option<T>, L> {
     }
 }
 
+// Implement Debug for Labeled<T, L> where T implements Debug
+impl<T, L> std::fmt::Debug for Labeled<T, L>
+where
+    T: std::fmt::Debug,
+    L: Label,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Labeled")
+            .field(&self.value)
+            .finish()
+    }
+}
+
+//Implement IntoIterator for Labeled<Vec<T>, L> 
+impl<T, L> IntoIterator for Labeled<Vec<T>, L>
+where
+    L: Label,
+{
+    type Item = Labeled<T, L>;
+    type IntoIter = std::vec::IntoIter<Labeled<T, L>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.__private_into_value()
+            .into_iter()
+            .map(Labeled::<T, L>::new)
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
+impl<'a, T, L> IntoIterator for &'a Labeled<Vec<T>, L>
+where
+    L: Label,
+{
+    type Item = Labeled<&'a T, L>;
+    type IntoIter = std::vec::IntoIter<Labeled<&'a T, L>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.__private_value()
+            .iter()
+            .map(Labeled::<&'a T, L>::new)
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
 // Implement Default for Labeled<T, L> where T implements Default
 impl<T: Default, L: Label> Default for Labeled<T, L> {
     fn default() -> Self {

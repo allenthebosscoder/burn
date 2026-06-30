@@ -168,9 +168,12 @@ mod tests {
     struct TestBatcherDevice;
 
     #[cfg(test)]
-    impl<I> Batcher<I, Device> for TestBatcherDevice {
-        fn batch(&self, _items: Vec<I>, device: &Device) -> Device {
-            device.clone()
+    impl<I, L> Batcher<I, Device, L> for TestBatcherDevice 
+    where
+        L: Label,
+    {
+        fn batch(&self, _items: Vec<Labeled<I, L>>, device: &Device) -> Labeled<Device, L> {
+            Labeled::<Device, L>::new(device.clone())
         }
     }
 
@@ -179,7 +182,7 @@ mod tests {
         let default_device = Device::default();
         let dataloader = DataLoaderBuilder::new(TestBatcherDevice::new())
             .batch_size(1)
-            .build(FakeDataset::<String>::new(9));
+            .build(FakeDataset::<String, A>::new(9));
 
         assert_eq!(dataloader.num_items(), 9);
 
@@ -194,7 +197,7 @@ mod tests {
         let dataloader = DataLoaderBuilder::new(TestBatcherDevice::new())
             .batch_size(1)
             .num_workers(1)
-            .build(FakeDataset::<String>::new(9));
+            .build(FakeDataset::<String, A>::new(9));
 
         assert_eq!(dataloader.num_items(), 9);
 
@@ -208,7 +211,7 @@ mod tests {
         let dataloader = DataLoaderBuilder::new(TestBatcherDevice::new())
             .batch_size(1)
             .num_workers(1)
-            .build(FakeDataset::<String>::new(11));
+            .build(FakeDataset::<String, A>::new(11));
 
         #[cfg(all(test, not(feature = "tch"), not(feature = "cuda")))]
         // Only one device exists...
@@ -230,13 +233,13 @@ mod tests {
         let (mut iterator_1, mut iterator_2) = (dataloader_1.iter(), dataloader_2.iter());
 
         for _ in 0..5 {
-            assert_eq!(iterator_1.next().as_ref(), Some(&device1));
-            assert_eq!(iterator_2.next().as_ref(), Some(&device2));
+            assert_eq!(iterator_1.next().as_ref(), Some(&Labeled::<Device, A>::new(device1.clone())));
+            assert_eq!(iterator_2.next().as_ref(), Some(&Labeled::<Device, A>::new(device2.clone())));
         }
 
         assert_eq!(iterator_1.next(), None);
         // For uneven split, the last dataloader (partial dataset) will have the remaining item
-        assert_eq!(iterator_2.next(), Some(device2));
+        assert_eq!(iterator_2.next(), Some(Labeled::<Device, A>::new(device2.clone())));
         assert_eq!(iterator_2.next(), None);
     }
 }

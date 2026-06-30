@@ -7,11 +7,12 @@ use crate::{
 };
 use burn_core::{data::dataloader::DataLoader, module::Module};
 use std::sync::Arc;
+use typing_rules::*;
 
 pub(crate) type TestInput<EC> = <<EC as EvaluatorComponentTypes>::Model as InferenceStep>::Input;
 pub(crate) type TestOutput<EC> = <<EC as EvaluatorComponentTypes>::Model as InferenceStep>::Output;
 
-pub(crate) type TestLoader<EC> = Arc<dyn DataLoader<TestInput<EC>>>;
+pub(crate) type TestLoader<EC> = Arc<dyn DataLoader<TestInput<EC>, A>>;
 
 /// Evaluates a model on a specific dataset.
 pub struct Evaluator<EC: EvaluatorComponentTypes> {
@@ -63,7 +64,7 @@ impl<EC: EvaluatorComponentTypes> Evaluator<EC> {
                 let progress = iterator.progress();
                 iteration += 1;
 
-                let item = self.model.step(item);
+                let item = self.model.step(declassify(item));
                 let item = EvaluationItem::new(item, progress, Some(iteration));
 
                 self.event_processor

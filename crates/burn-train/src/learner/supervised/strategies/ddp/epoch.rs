@@ -7,6 +7,7 @@ use crate::SupervisedTrainingEventProcessor;
 use crate::learner::base::Interrupter;
 use crate::metric::processor::{EventProcessorTraining, LearnerEvent, TrainingItem};
 use crate::{InferenceStep, Learner, LearningComponentsTypes, TrainLoader, ValidLoader};
+use typing_rules::*;
 
 /// A validation epoch.
 #[derive(new)]
@@ -46,7 +47,7 @@ impl<LC: LearningComponentsTypes> DdpValidEpoch<LC> {
             let progress = iterator.progress();
             iteration += 1;
 
-            let item = model.step(item);
+            let item = model.step(declassify(item));
             let item = TrainingItem::new(item, progress, Some(iteration), None);
 
             processor.process_valid(LearnerEvent::ProcessedItem(item));
@@ -99,7 +100,7 @@ impl<LC: LearningComponentsTypes> DdpTrainEpoch<LC> {
             progress.items_processed *= peer_count;
             progress.items_total *= peer_count;
 
-            let item = learner.train_step(item);
+            let item = learner.train_step(declassify(item));
 
             match self.grad_accumulation {
                 Some(accumulation) => {

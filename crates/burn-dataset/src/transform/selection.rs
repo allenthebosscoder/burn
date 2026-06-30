@@ -286,14 +286,14 @@ mod tests {
     #[should_panic(expected = "Index out of bounds for wrapped dataset size: 300 >= 27")]
     #[test]
     fn test_from_indices_checked_panics() {
-        let source_dataset = FakeDataset::<String>::new(27);
+        let source_dataset = FakeDataset::<String, A>::new(27);
         let indices: Vec<usize> = vec![15, 1, 12, 300];
         SelectionDataset::from_indices_checked(source_dataset, indices);
     }
 
     #[test]
     fn test_checked_selection_dataset() {
-        let source_dataset = FakeDataset::<String>::new(27);
+        let source_dataset = FakeDataset::<String, A>::new(27);
 
         let indices: Vec<usize> = vec![15, 1, 12, 12];
         let expected: Vec<String> = indices
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_shuffled_dataset() {
-        let dataset = FakeDataset::<String>::new(27);
+        let dataset = FakeDataset::<String, A>::new(27);
         let source_items = dataset.iter().collect::<Vec<_>>();
 
         let selection = SelectionDataset::new_shuffled(dataset, 42);
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_slice() {
-        let dataset = FakeDataset::<String>::new(27);
+        let dataset = FakeDataset::<String, A>::new(27);
         let source_items = dataset.iter().collect::<Vec<_>>();
 
         let selection = SelectionDataset::new_select_all(dataset);
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn test_split() {
-        let dataset = FakeDataset::<String>::new(28);
+        let dataset = FakeDataset::<String, A>::new(28);
         let source_items = dataset.iter().collect::<Vec<_>>();
 
         let selection = SelectionDataset::new_select_all(dataset);

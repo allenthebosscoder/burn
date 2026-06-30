@@ -6,6 +6,7 @@ use burn_core::module::Module;
 use burn_core::tensor::Device;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::spawn;
+use typing_rules::*;
 
 /// Multi devices train step.
 pub struct MultiDevicesTrainStep<LC: LearningComponentsTypes> {
@@ -119,7 +120,7 @@ impl<LC: LearningComponentsTypes> MultiDevicesTrainStep<LC> {
     /// Outputs.
     pub fn step<'a>(
         &self,
-        dataloaders: &mut [Box<dyn DataLoaderIterator<TrainingModelInput<LC>> + 'a>],
+        dataloaders: &mut [Box<dyn DataLoaderIterator<TrainingModelInput<LC>, A> + 'a>],
         model: &TrainingModel<LC>,
     ) -> (Vec<MultiTrainOutput<TrainingModelOutput<LC>>>, Progress) {
         let mut num_send = 0;
@@ -131,7 +132,7 @@ impl<LC: LearningComponentsTypes> MultiDevicesTrainStep<LC> {
         for (i, worker) in self.workers.iter().enumerate() {
             let dataloader = &mut dataloaders[i];
             if let Some(item) = dataloader.next() {
-                worker.register(item, model);
+                worker.register(declassify(item), model);
                 num_send += 1;
                 let progress = dataloader.progress();
                 items_total += progress.items_total;

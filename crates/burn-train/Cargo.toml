@@ -37,6 +37,8 @@ burn-nn = { workspace = true, optional = true, features = ["std"] }
 burn-store = { workspace = true, optional = true, features = ["std"] }
 burn-std = { workspace = true, default-features = false, features = ["std"] }
 dirs = { workspace = true, optional = true }
+macros = { path = "../../fg_ifc_library/macros" }
+typing_rules = { path = "../../fg_ifc_library/typing_rules" }
 
 log = { workspace = true }
 tracing-subscriber = { workspace = true }

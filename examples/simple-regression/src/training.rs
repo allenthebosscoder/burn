@@ -1,4 +1,4 @@
-use crate::dataset::{HousingBatcher, HousingDataset};
+use crate::dataset::{HousingDistrictItem, HousingBatch, HousingBatcher, HousingDataset};
 use crate::model::RegressionModelConfig;
 use burn::optim::AdamConfig;
 use burn::train::{Learner, SupervisedTraining};
@@ -54,23 +54,23 @@ pub fn run(artifact_dir: &str, device: impl Into<Device>) {
     println!("Train Dataset Size: {}", train_dataset.len());
     println!("Valid Dataset Size: {}", valid_dataset.len());
 
-    let batcher_train = HousingBatcher::<A>::new(&autodiff_device);
-    let batcher_test = HousingBatcher::<A>::new(&device);
+    let batcher_train = HousingBatcher::new(&autodiff_device);
+    let batcher_test = HousingBatcher::new(&device);
 
-    let dataloader_train = DataLoaderBuilder::<A>::new(batcher_train)
+    let dataloader_train = DataLoaderBuilder::<HousingDistrictItem, HousingBatch, A>::new(batcher_train)
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
         .build(train_dataset);
 
-    let dataloader_test = DataLoaderBuilder::<A>::new(batcher_test)
+    let dataloader_test = DataLoaderBuilder::<HousingDistrictItem, HousingBatch, A>::new(batcher_test)
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
         .build(valid_dataset);
 
     // Model
-    let training = SupervisedTraining::Labeled<A>::new(artifact_dir, dataloader_train, dataloader_test)
+    let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .with_file_checkpointer(CompactRecorder::new())
@@ -82,8 +82,6 @@ pub fn run(artifact_dir: &str, device: impl Into<Device>) {
     config
         .save(format!("{artifact_dir}/config.json").as_str())
         .unwrap();
-
-    let result = declassify(result);
     
     result
         .model

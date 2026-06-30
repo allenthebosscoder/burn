@@ -351,17 +351,17 @@ mod tests {
 
     #[test]
     fn sampler_dataset_constructors_test() {
-        let ds = SamplerDataset::new(FakeDataset::<u32>::new(10), 15);
+        let ds = SamplerDataset::new(FakeDataset::<u32, L>::new(10), 15);
         assert_eq!(ds.len(), 15);
         assert_eq!(ds.dataset.len(), 10);
         assert!(ds.is_with_replacement());
 
-        let ds = SamplerDataset::with_replacement(FakeDataset::<u32>::new(10), 15);
+        let ds = SamplerDataset::with_replacement(FakeDataset::<u32, L>::new(10), 15);
         assert_eq!(ds.len(), 15);
         assert_eq!(ds.dataset.len(), 10);
         assert!(ds.is_with_replacement());
 
-        let ds = SamplerDataset::without_replacement(FakeDataset::<u32>::new(10), 15);
+        let ds = SamplerDataset::without_replacement(FakeDataset::<u32, L>::new(10), 15);
         assert_eq!(ds.len(), 15);
         assert_eq!(ds.dataset.len(), 10);
         assert!(!ds.is_with_replacement());
@@ -390,7 +390,7 @@ mod tests {
         let len_original = 10;
 
         let dataset_sampler = SamplerDataset::new(
-            FakeDataset::<String>::new(len_original),
+            FakeDataset::<String, A>::new(len_original),
             SamplerDatasetOptions::default()
                 .without_replacement()
                 .with_size_ratio(factor as f64),
@@ -420,7 +420,7 @@ mod tests {
         // This is a reversion test on the indices.shuffle(rng) call in SamplerDataset::index().
         let size = 1000;
         let dataset_sampler =
-            SamplerDataset::without_replacement(FakeDataset::<i32>::new(size), size);
+            SamplerDataset::without_replacement(FakeDataset::<i32, L>::new(size), size);
 
         let indices: Vec<_> = (0..size).map(|_| dataset_sampler.index()).collect();
         let mean_delta = indices

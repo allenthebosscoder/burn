@@ -98,7 +98,7 @@ pub struct SqliteDataset<I, L: Label> {
     len: usize,
     select_statement: String,
     row_serialized: bool,
-    phantom: PhantomData<Labeled<I, L>>,
+    phantom: PhantomData<I>,
 }
 
 impl<I, L: Label> SqliteDataset<I, L> {
@@ -683,13 +683,13 @@ mod tests {
 
     #[rstest]
     pub fn get_none(train_dataset: SqlDs) {
-        assert_eq!(train_dataset.get(10), None);
+        assert!(train_dataset.get(10).is_none());
     }
 
     #[rstest]
     pub fn multi_thread(train_dataset: SqlDs) {
         let indices: Vec<usize> = vec![0, 1, 1, 3, 4, 5, 6, 0, 8, 1];
-        let results: Vec<Option<Sample>> =
+        let results: Vec<Option<Labeled<Sample, A>>> =
             indices.par_iter().map(|&i| train_dataset.get(i)).collect();
 
         let mut match_count = 0;

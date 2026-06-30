@@ -745,12 +745,12 @@ mod tests {
 
         // Dataset has 3 elements
         assert_eq!(dataset.len(), 3);
-        assert_eq!(dataset.get(3), None);
+        assert!(dataset.get(3).is_none());
 
         // Dataset elements should be: orange (0), red (1), red (1)
-        assert_eq!(dataset.get(0).unwrap().annotation, Annotation::Label(0));
-        assert_eq!(dataset.get(1).unwrap().annotation, Annotation::Label(1));
-        assert_eq!(dataset.get(2).unwrap().annotation, Annotation::Label(1));
+        assert_eq!(declassify(dataset.get(0).unwrap()).annotation, Annotation::Label(0));
+        assert_eq!(declassify(dataset.get(1).unwrap()).annotation, Annotation::Label(1));
+        assert_eq!(declassify(dataset.get(2).unwrap()).annotation, Annotation::Label(1));
     }
 
     #[test]
@@ -759,11 +759,11 @@ mod tests {
 
         // Filtered dataset has 2 elements
         assert_eq!(dataset.len(), 2);
-        assert_eq!(dataset.get(2), None);
+        assert!(dataset.get(2).is_none());
 
         // Dataset elements should be: orange (0), red (1)
-        assert_eq!(dataset.get(0).unwrap().annotation, Annotation::Label(0));
-        assert_eq!(dataset.get(1).unwrap().annotation, Annotation::Label(1));
+        assert_eq!(declassify(dataset.get(0).unwrap()).annotation, Annotation::Label(0));
+        assert_eq!(declassify(dataset.get(1).unwrap()).annotation, Annotation::Label(1));
     }
 
     #[test]
@@ -779,28 +779,28 @@ mod tests {
 
         // Dataset has 3 elements
         assert_eq!(dataset.len(), 3);
-        assert_eq!(dataset.get(3), None);
+        assert!(dataset.get(3).is_none());
 
         // Test item sizes
 
         assert_eq!(
             (
-                dataset.get(0).unwrap().image_width,
-                dataset.get(0).unwrap().image_height
+                declassify(dataset.get(0).unwrap()).image_width,
+                declassify(dataset.get(0).unwrap()).image_height
             ),
             (1, 1)
         );
         assert_eq!(
             (
-                dataset.get(1).unwrap().image_width,
-                dataset.get(1).unwrap().image_height
+                declassify(dataset.get(1).unwrap()).image_width,
+                declassify(dataset.get(1).unwrap()).image_height
             ),
             (1, 1)
         );
         assert_eq!(
             (
-                dataset.get(2).unwrap().image_width,
-                dataset.get(2).unwrap().image_height
+                declassify(dataset.get(2).unwrap()).image_width,
+                declassify(dataset.get(2).unwrap()).image_height
             ),
             (1, 1)
         );
@@ -819,12 +819,12 @@ mod tests {
 
         // Dataset has 3 elements
         assert_eq!(dataset.len(), 3);
-        assert_eq!(dataset.get(3), None);
+        assert!(dataset.get(3).is_none());
 
         // Dataset elements should be: orange (0), red (1), red (1)
-        assert_eq!(dataset.get(0).unwrap().annotation, Annotation::Label(0));
-        assert_eq!(dataset.get(1).unwrap().annotation, Annotation::Label(1));
-        assert_eq!(dataset.get(2).unwrap().annotation, Annotation::Label(1));
+        assert_eq!(declassify(dataset.get(0).unwrap()).annotation, Annotation::Label(0));
+        assert_eq!(declassify(dataset.get(1).unwrap()).annotation, Annotation::Label(1));
+        assert_eq!(declassify(dataset.get(2).unwrap()).annotation, Annotation::Label(1));
     }
 
     #[test]
@@ -852,19 +852,19 @@ mod tests {
 
         // Dataset has 3 elements
         assert_eq!(dataset.len(), 3);
-        assert_eq!(dataset.get(3), None);
+        assert!(dataset.get(3).is_none());
 
         // Dataset elements should be: [dot, orange] (0, 1), [dot, red] (0, 2), [dot, red] (0, 2)
         assert_eq!(
-            dataset.get(0).unwrap().annotation,
+            declassify(dataset.get(0).unwrap()).annotation,
             Annotation::MultiLabel(vec![0, 1])
         );
         assert_eq!(
-            dataset.get(1).unwrap().annotation,
+            declassify(dataset.get(1).unwrap()).annotation,
             Annotation::MultiLabel(vec![0, 2])
         );
         assert_eq!(
-            dataset.get(2).unwrap().annotation,
+            declassify(dataset.get(2).unwrap()).annotation,
             Annotation::MultiLabel(vec![0, 2])
         );
     }
@@ -873,7 +873,7 @@ mod tests {
     #[should_panic]
     pub fn image_folder_dataset_invalid_extension() {
         // Some invalid file extension
-        let _ = ImageFolderDataset::new_classification_with(DATASET_ROOT, &["ico"]).unwrap();
+        let dataset = ImageFolderDataset::new_classification_with(DATASET_ROOT, &["ico"]).unwrap();
     }
 
     #[test]
@@ -1020,7 +1020,7 @@ mod tests {
 
         // Dataset has 3 elements; each (image, annotation) is a single item
         assert_eq!(dataset.len(), 3);
-        assert_eq!(dataset.get(3), None);
+        assert!(dataset.get(3).is_none());
 
         // checkerboard mask
         const TEST_CHECKERBOARD_MASK_PATTERN: [u8; 64] = [
@@ -1029,7 +1029,7 @@ mod tests {
             2, 1, 2, 1, 2, 1,
         ];
         assert_eq!(
-            dataset.get(0).unwrap().annotation,
+            declassify(dataset.get(0).unwrap()).annotation,
             Annotation::SegmentationMask(SegmentationMask {
                 mask: TEST_CHECKERBOARD_MASK_PATTERN
                     .iter()
@@ -1044,7 +1044,7 @@ mod tests {
             1, 1, 1, 1, 1, 1,
         ];
         assert_eq!(
-            dataset.get(1).unwrap().annotation,
+            declassify(dataset.get(1).unwrap()).annotation,
             Annotation::SegmentationMask(SegmentationMask {
                 mask: TEST_RANDOM2COLORS_MASK_PATTERN
                     .iter()
@@ -1059,7 +1059,7 @@ mod tests {
             3, 3, 2, 1, 2, 2,
         ];
         assert_eq!(
-            dataset.get(2).unwrap().annotation,
+            declassify(dataset.get(2).unwrap()).annotation,
             Annotation::SegmentationMask(SegmentationMask {
                 mask: TEST_RANDOM3COLORS_MASK_PATTERN
                     .iter()
@@ -1073,7 +1073,7 @@ mod tests {
     pub fn coco_detection_dataset() {
         let dataset = ImageFolderDataset::new_coco_detection(COCO_JSON, COCO_IMAGES).unwrap();
         assert_eq!(dataset.len(), 3); // we have only three images defined
-        assert_eq!(dataset.get(3), None);
+        assert!(dataset.get(3).is_none());
 
         const TWO_DOTS_AND_TRIANGLE_B1: BoundingBox = BoundingBox {
             coords: [3.125_172, 18.090_784, 10.960_11, 10.740_027],
@@ -1106,8 +1106,8 @@ mod tests {
         };
 
         for item in dataset.iter() {
-            let file_name = Path::new(&item.image_path).file_name().unwrap();
-            match item.annotation {
+            let file_name = Path::new(&declassify(item).image_path).file_name().unwrap();
+            match declassify(item).annotation {
                 // check if the number of bounding boxes is correct
                 Annotation::BoundingBoxes(v) => {
                     if file_name == "two_dots_and_triangle.jpg" {
@@ -1123,7 +1123,7 @@ mod tests {
                         assert_eq!(v.len(), 1);
                         assert!(v.contains(&ONE_DOT_B1));
                     } else {
-                        panic!("{}", format!("unexpected image name: {}", item.image_path));
+                        panic!("{}", format!("unexpected image name: {}", declassify(item).image_path));
                     }
                 }
                 _ => panic!("unexpected annotation"),

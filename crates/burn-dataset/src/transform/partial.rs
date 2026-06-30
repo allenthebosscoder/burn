@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn test_start_from_beginning() {
-        let dataset_original = FakeDataset::<String>::new(27);
+        let dataset_original = FakeDataset::<String, A>::new(27);
         let mut items_original_1 = HashSet::new();
         let mut items_original_2 = HashSet::new();
         let mut items_partial = HashSet::new();
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_start_inside() {
-        let dataset_original = FakeDataset::<String>::new(27);
+        let dataset_original = FakeDataset::<String, A>::new(27);
         let mut items_original_1 = HashSet::new();
         let mut items_original_2 = HashSet::new();
         let mut items_partial = HashSet::new();
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_split_contains_all_items_without_duplicates() {
-        let dataset_original = FakeDataset::<String>::new(27);
+        let dataset_original = FakeDataset::<String, A>::new(27);
         let mut items_original = Vec::new();
         let mut items_partial = Vec::new();
         for item in dataset_original.iter() {
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_split_chunks_contains_all_items_without_duplicates() {
-        let dataset_original = FakeDataset::<String>::new(27);
+        let dataset_original = FakeDataset::<String, A>::new(27);
         let mut items_original = Vec::new();
         let mut items_partial = Vec::new();
         for item in dataset_original.iter() {

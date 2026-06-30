@@ -34,9 +34,9 @@ use std::sync::Arc;
 use typing_rules::*;
 
 /// A reference to the training split [DataLoader](DataLoader).
-pub type TrainLoader<LC> = Arc<dyn DataLoader<TrainingModelInput<LC>, L>>;
+pub type TrainLoader<LC> = Arc<dyn DataLoader<TrainingModelInput<LC>, A>>;
 /// A reference to the validation split [DataLoader](DataLoader).
-pub type ValidLoader<LC> = Arc<dyn DataLoader<InferenceModelInput<LC>,L>>;
+pub type ValidLoader<LC> = Arc<dyn DataLoader<InferenceModelInput<LC>, A>>;
 /// The event processor type for supervised learning.
 pub type SupervisedTrainingEventProcessor<LC> = AsyncProcessorTraining<
     LearnerEvent<TrainingModelOutput<LC>>,
@@ -91,8 +91,8 @@ where
     /// * `dataloader_valid` - The dataloader for the validation split.
     pub fn new(
         directory: impl AsRef<Path>,
-        dataloader_train: Arc<dyn DataLoader<<M as TrainStep>::Input, L>>,
-        dataloader_valid: Arc<dyn DataLoader<<M as InferenceStep>::Input, L>>,
+        dataloader_train: Arc<dyn DataLoader<<M as TrainStep>::Input, A>>,
+        dataloader_valid: Arc<dyn DataLoader<<M as InferenceStep>::Input, A>>,
     ) -> Self {
         let directory = directory.as_ref().to_path_buf();
         let experiment_log_file = directory.join("experiment.log");

@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn test_batch_dataloader() {
         let batcher = Arc::new(TestBatcher::new());
-        let dataset = Arc::new(FakeDataset::<String>::new(27));
+        let dataset = Arc::new(FakeDataset::<String, A>::new(27));
         let dataloader = BatchDataLoader::new(
             Box::new(FixBatchStrategy::new(5)),
             dataset.clone(),
@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn test_batch_dataloader_slice() {
         let batcher = Arc::new(TestBatcher::new());
-        let dataset = Arc::new(FakeDataset::<String>::new(27));
+        let dataset = Arc::new(FakeDataset::<String, A>::new(27));
         let dataloader = BatchDataLoader::new(
             Box::new(FixBatchStrategy::new(5)),
             dataset.clone(),
