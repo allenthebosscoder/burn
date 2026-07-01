@@ -48,11 +48,11 @@ impl<LC: LearningComponentsTypes, L: Label> SupervisedLearningStrategy<LC, L> fo
     fn fit(
         &self,
         training_components: TrainingComponents<LC>,
-        mut learner: Learner<LC>,
+        mut learner: Learner<LC, L>,
         dataloader_train: TrainLoader<LC, L>,
         dataloader_valid: ValidLoader<LC, L>,
         starting_epoch: usize,
-    ) -> (TrainingModel<LC>, SupervisedTrainingEventProcessor<LC>) {
+    ) -> (Labeled<TrainingModel<LC>, L>, SupervisedTrainingEventProcessor<LC>) {
         let dataloader_train = dataloader_train.to_device(&self.device);
         let train_total_items = dataloader_train.num_items();
         let dataloader_valid = dataloader_valid.to_device(&self.device.clone().inner());

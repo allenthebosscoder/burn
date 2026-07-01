@@ -198,6 +198,11 @@ pub fn fcall(input: TokenStream) -> TokenStream {
     enum ChainKind {
         Owned,
         Ref,
+        /// `&mut ident` where `ident: Labeled<T, L>`.
+        /// `__chain_mut` consumes the labeled value, gives `&mut T` to the closure,
+        /// packs `(T, R)` into a labeled tuple, which the macro then splits and uses
+        /// to reassign the original variable with the updated label.
+        Mut(Ident),
     }
     struct ChainEntry {
         kind: ChainKind,
@@ -331,6 +336,42 @@ pub fn fcall(input: TokenStream) -> TokenStream {
                     inner_call_args.push(quote! { vec![#(#reconstructed),*] });
                 }
             }
+            // &mut ident  — labeled mutable arg: use __chain_mut so the label on the
+            // variable grows to include every label that flowed into this call.
+            // &mut *expr  — plain reborrow (e.g. &mut *learner): treat as owned value,
+            // same as the existing `other` arm.
+            syn::Expr::Reference(r) if r.mutability.is_some() => {
+                // A simple path with no deref means the user wrote `&mut some_labeled_var`.
+                let plain_ident = match r.expr.as_ref() {
+                    syn::Expr::Path(p) => p.path.get_ident().cloned(),
+                    _ => None,
+                };
+                if let Some(var_ident) = plain_ident {
+                    // &mut some_ident — labeled mutable
+                    let name = format_ident!("__v{}", chain_idx);
+                    chain_idx += 1;
+                    let inner_expr = &r.expr;
+                    // The closure receives &mut T (the raw inner value), so the function
+                    // call arg is just `name` — no extra & needed.
+                    inner_call_args.push(quote! { #name });
+                    chain_entries.push(ChainEntry {
+                        kind: ChainKind::Mut(var_ident),
+                        target: quote! { #inner_expr },
+                        name,
+                    });
+                } else {
+                    // &mut *expr or other complex &mut — treat as a plain owned value.
+                    let full_ref = arg;
+                    let name = format_ident!("__v{}", chain_idx);
+                    chain_idx += 1;
+                    inner_call_args.push(quote! { #name });
+                    chain_entries.push(ChainEntry {
+                        kind: ChainKind::Owned,
+                        target: quote! { (#full_ref) },
+                        name,
+                    });
+                }
+            }
             other => {
                 let name = format_ident!("__v{}", chain_idx);
                 chain_idx += 1;
@@ -363,6 +404,11 @@ pub fn fcall(input: TokenStream) -> TokenStream {
     // Label idempotency (L ∨ L = L) is guaranteed by the Label supertrait bound
     // Join<Self, Out = Self>, so chaining multiple args of the same label L produces
     // Join<L, Join<L, Public>> = Join<L, L> = L — no special handling needed.
+
+    // Tracks any `&mut ident` arg found during the non-async chain build so the
+    // final output block can emit `.split()` and reassign the labeled variable.
+    let mut mut_reassign_var: Option<Ident> = None;
+
     if has_await {
         for entry in chain_entries.iter().rev() {
             let target = &entry.target;
@@ -377,7 +423,7 @@ pub fn fcall(input: TokenStream) -> TokenStream {
         for entry in chain_entries.iter().rev() {
             let target = &entry.target;
             let name = &entry.name;
-            expanded = match entry.kind {
+            expanded = match &entry.kind {
                 ChainKind::Ref => quote! {
                     (#target).__chain_ref(|#name| {
                         #expanded
@@ -388,6 +434,17 @@ pub fn fcall(input: TokenStream) -> TokenStream {
                         #expanded
                     })
                 },
+                // __chain_mut consumes the labeled value, gives &mut T to the closure,
+                // and returns Labeled<(T, R), JoinedLabel> so the caller can split to
+                // recover the (updated) labeled T alongside the function's return R.
+                ChainKind::Mut(var_ident) => {
+                    mut_reassign_var = Some(var_ident.clone());
+                    quote! {
+                        (#target).__chain_mut(|#name| {
+                            #expanded
+                        })
+                    }
+                }
             };
         }
     }
@@ -441,6 +498,23 @@ pub fn fcall(input: TokenStream) -> TokenStream {
                 use ::typing_rules::function_rewrite::SecureAsyncChain;
                 #panic_guard
                 let __fcall_result = { #expanded };
+                drop(__fcall_panic_guard);
+                __fcall_result
+            }
+        }
+    } else if let Some(var_ident) = mut_reassign_var {
+        // A `&mut ident` arg was present: the outermost chain used `__chain_mut`,
+        // so `expanded` evaluates to `Labeled<(T, R), L>`.  Split it to recover
+        // the updated labeled T (reassigned back to the variable) and the labeled
+        // return R (the expression value of this fcall! invocation).
+        quote! {
+            {
+                use ::typing_rules::function_rewrite::SecureChain;
+                use ::typing_rules::function_rewrite::SecureChainRef;
+                use ::typing_rules::function_rewrite::SecureChainMut;
+                #panic_guard
+                let (__fcall_updated_labeled, __fcall_result) = { #expanded }.split();
+                #var_ident = __fcall_updated_labeled;
                 drop(__fcall_panic_guard);
                 __fcall_result
             }

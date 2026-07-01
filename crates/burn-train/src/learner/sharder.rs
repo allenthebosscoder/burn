@@ -4,6 +4,8 @@ use burn_core::{
 };
 
 use crate::{Learner, LearningComponentsTypes};
+use typing_rules::*;
+use macros::fcall;
 
 /// Describes how the module is distributed across multiple devices.
 pub struct ModuleSharder;
@@ -16,9 +18,9 @@ impl ModuleMapper for ModuleSharder {
     }
 }
 
-impl<LC: LearningComponentsTypes> Learner<LC> {
+impl<LC: LearningComponentsTypes, L: Label> Learner<LC, L> {
     /// Mark the model as sharded across multiple devices.
     pub fn grad_sharded(&mut self) {
-        self.model = self.model.clone().map(&mut ModuleSharder);
+        self.model = fcall!(Module::map(Clone::clone(&self.model), &mut (ModuleSharder)));
     }
 }

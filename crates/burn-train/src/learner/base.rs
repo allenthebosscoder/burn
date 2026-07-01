@@ -16,6 +16,8 @@ use burn_optim::{GradientsParams, ModuleOptimizer, MultiGradientsParams, Optimiz
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use typing_rules::*; // import filament ifc
+use macros::{fcall, mcall};
 
 /// The record of the learner's model.
 pub type LearnerModelRecord = ModuleRecord;
@@ -25,14 +27,14 @@ pub type LearnerOptimizerRecord = OptimizerRecord;
 pub type LearnerSchedulerRecord = LrSchedulerRecord;
 
 /// Learner struct encapsulating all components necessary to train a Neural Network model.
-pub struct Learner<LC: LearningComponentsTypes> {
-    pub(crate) model: LC::Model,
+pub struct Learner<LC: LearningComponentsTypes, L: Label> {
+    pub(crate) model: Labeled<LC::Model, L>,
     optim: ModuleOptimizer,
     lr_scheduler: LC::LrScheduler,
     lr: f64,
 }
 
-impl<LC: LearningComponentsTypes> Clone for Learner<LC> {
+impl<LC: LearningComponentsTypes, L: Label> Clone for Learner<LC, L> {
     fn clone(&self) -> Self {
         Self {
             model: self.model.clone(),
@@ -43,13 +45,14 @@ impl<LC: LearningComponentsTypes> Clone for Learner<LC> {
     }
 }
 
-impl<LR, M> Learner<LearningComponentsMarker<LR, M>>
+impl<LR, M, L> Learner<LearningComponentsMarker<LR, M>, L>
 where
     LR: LrScheduler + 'static,
     M: TrainStep + InferenceStep + AutodiffModule + core::fmt::Display + 'static,
+    L: Label
 {
-    /// Create a learner.
-    pub fn new(model: M, optim: ModuleOptimizer, lr_scheduler: LR) -> Self {
+    /// Create a learner. The model must be pre-labeled to establish the IFC security level.
+    pub fn new(model: Labeled<M, L>, optim: ModuleOptimizer, lr_scheduler: LR) -> Self {
         Self {
             model,
             optim,
@@ -59,14 +62,14 @@ where
     }
 }
 
-impl<LC: LearningComponentsTypes> Learner<LC> {
-    /// Fork the learner's model to the given device.
+impl<LC: LearningComponentsTypes, L: Label> Learner<LC, L> {
+    /// Fork the learner's model to the given device, preserving the IFC label.
     pub fn fork(&mut self, device: &Device) {
-        self.model = self.model().fork(device);
+        self.model = fcall!(Module::fork(Clone::clone(&self.model), device));
     }
 
-    /// Returns the current model.
-    pub fn model(&self) -> LC::Model {
+    /// Returns the labeled model.
+    pub fn model(&self) -> Labeled<LC::Model, L> {
         self.model.clone()
     }
 
@@ -80,44 +83,28 @@ impl<LC: LearningComponentsTypes> Learner<LC> {
         self.lr = self.lr_scheduler.step();
     }
 
-    /// Runs a step of the model for training, which executes the forward and backward passes.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` - The input for the model.
-    ///
-    /// # Returns
-    ///
-    /// The output containing the model output and the gradients.
-    pub fn train_step(&self, item: TrainingModelInput<LC>) -> TrainOutput<TrainingModelOutput<LC>> {
-        TrainStep::step(&self.model, item)
+    /// Runs a training step. Takes a labeled item and returns a labeled output so
+    /// epoch.rs calls this directly without an outer fcall! wrapper.
+    pub fn train_step(&self, item: Labeled<TrainingModelInput<LC>, L>) -> Labeled<TrainOutput<TrainingModelOutput<LC>>, L> {
+        fcall!(TrainStep::step(&self.model, item))
     }
 
-    /// Optimize the current module with the provided gradients and learning rate.
-    ///
-    /// # Arguments
-    ///
-    /// * `optim`: Optimizer used for learning.
-    /// * `lr`: The learning rate used for this step.
-    /// * `grads`: The gradients of each parameter in the current model.
+    /// Optimize the current module with the provided gradients and learning rate,
+    /// preserving the IFC label on the model.
     pub fn optimizer_step(&mut self, grads: GradientsParams) {
-        self.model = self.model().optimize(&mut self.optim, self.lr, grads);
+        let model = Clone::clone(&self.model);
+        self.model = fcall!(TrainStep::optimize(model, &mut self.optim, self.lr, grads));
     }
 
-    /// Optimize the current module with the provided gradients and learning rate.
-    ///
-    /// # Arguments
-    ///
-    /// * `optim`: Optimizer used for learning.
-    /// * `lr`: The learning rate used for this step.
-    /// * `grads`: Multiple gradients associated to each parameter in the current model.
+    /// Optimize with multiple gradient sets, preserving the IFC label on the model.
     pub fn optimizer_step_multi(&mut self, grads: MultiGradientsParams) {
-        self.model = self.model().optimize_multi(&mut self.optim, self.lr, grads);
+        let model = Clone::clone(&self.model);
+        self.model = fcall!(TrainStep::optimize_multi(model, &mut self.optim, self.lr, grads));
     }
 
-    /// Load the module state from a [record](LearnerModelRecord).
+    /// Load the module state from a record, preserving the IFC label on the model.
     pub fn load_model(&mut self, record: LearnerModelRecord) {
-        self.model = self.model.clone().load_record(record);
+        self.model = fcall!(Module::load_record(Clone::clone(&self.model), record));
     }
 
     /// Load the state of the learner's optimizer from a [record](LearnerOptimizerRecord).
@@ -161,7 +148,7 @@ impl<LC: LearningComponentsTypes> LearningCheckpointer<LC> {
     }
 
     /// Create checkpoint for the training process.
-    pub fn checkpoint(&mut self, learner: &Learner<LC>, epoch: usize, store: &EventStoreClient) {
+    pub fn checkpoint<L: Label>(&mut self, learner: &Learner<LC, L>, epoch: usize, store: &EventStoreClient) {
         let actions = self.strategy.checkpointing(epoch, store);
 
         for action in actions {
@@ -179,7 +166,7 @@ impl<LC: LearningComponentsTypes> LearningCheckpointer<LC> {
                 }
                 CheckpointingAction::Save => {
                     self.model
-                        .save(epoch, learner.model.clone().into_record())
+                        .save(epoch, declassify(mcall!(learner.model.into_record())))
                         .expect("Can save model checkpoint.");
                     self.optim
                         .save(epoch, learner.optim.to_record())
@@ -198,7 +185,7 @@ impl<LC: LearningComponentsTypes> LearningCheckpointer<LC> {
     /// load, the model keeps the device of the learner's existing parameters, and the optimizer
     /// state is migrated to each parameter's device on the next step. The training device is fixed
     /// earlier, when the learner's model is created/forked.
-    pub fn load_checkpoint(&self, mut learner: Learner<LC>, epoch: usize) -> Learner<LC> {
+    pub fn load_checkpoint<L: Label>(&self, mut learner: Learner<LC, L>, epoch: usize) -> Learner<LC, L> {
         let record = self
             .model
             .restore(epoch)

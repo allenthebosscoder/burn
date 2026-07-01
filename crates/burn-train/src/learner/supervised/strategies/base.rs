@@ -10,6 +10,7 @@ use crate::{
 };
 use burn_core::tensor::distributed::{DistributedConfig, DistributedContext};
 use burn_core::{module::AutodiffModule, prelude::Device};
+use macros::{fcall, mcall};
 use std::sync::Arc;
 use typing_rules::*; // import filament ifc
 
@@ -122,23 +123,22 @@ pub trait SupervisedLearningStrategy<LC: LearningComponentsTypes, L: Label> {
     /// Train the learner's model with this strategy.
     fn train(
         &self,
-        mut learner: Learner<LC>,
+        mut learner: Learner<LC, L>,
         dataloader_train: TrainLoader<LC, L>,
         dataloader_valid: ValidLoader<LC, L>,
         mut training_components: TrainingComponents<LC>,
-    ) -> LearningResult<InferenceModel<LC>> {
+    ) -> LearningResult<Labeled<InferenceModel<LC>, L>> {
         let starting_epoch = training_components.checkpoint.unwrap_or(0) + 1;
         let summary_config = training_components.summary.clone();
 
-        // Event processor start training
         training_components
             .event_processor
             .process_train(LearnerEvent::Start {
                 total_epochs: training_components.num_epochs,
                 starting_epoch,
             });
-        // Training loop
-        let (model, mut event_processor) = self.fit(
+        // Model stays labeled throughout training.
+        let (labeled_model, mut event_processor) = self.fit(
             training_components,
             learner,
             dataloader_train,
@@ -149,26 +149,31 @@ pub trait SupervisedLearningStrategy<LC: LearningComponentsTypes, L: Label> {
         let summary = summary_config.and_then(|summary| {
             summary
                 .init()
-                .map(|summary| summary.with_model(model.to_string()))
+                // Declassify here only to produce the UI summary string.
+                // The model architecture (layer names, shapes) is determined by the config,
+                // not the training data, so it is public metadata — safe to declassify.
+                .map(|summary| summary.with_model(declassify(mcall!(labeled_model.to_string()))))
                 .ok()
         });
 
         // Signal training end. For the TUI renderer, this handles the exit & return to main screen.
         event_processor.process_train(LearnerEvent::End(summary));
 
-        let model = model.valid();
+        // Strip autodiff backend while keeping the IFC label.
+        // The caller (training.rs) holds the labeled model and declassifies it before saving.
+        let labeled_model = fcall!(AutodiffModule::valid(labeled_model));
         let renderer = event_processor.renderer();
 
-        LearningResult::<InferenceModel<LC>> { model, renderer }
+        LearningResult::<Labeled<InferenceModel<LC>, L>> { model: labeled_model, renderer }
     }
 
     /// Training loop for this strategy
     fn fit(
         &self,
         training_components: TrainingComponents<LC>,
-        learner: Learner<LC>,
+        learner: Learner<LC, L>,
         dataloader_train: TrainLoader<LC, L>,
         dataloader_valid: ValidLoader<LC, L>,
         starting_epoch: usize,
-    ) -> (TrainingModel<LC>, SupervisedTrainingEventProcessor<LC>);
+    ) -> (Labeled<TrainingModel<LC>, L>, SupervisedTrainingEventProcessor<LC>);
 }

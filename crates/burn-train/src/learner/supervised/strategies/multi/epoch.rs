@@ -82,7 +82,8 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
             .map(|d| d.iter())
             .collect::<Vec<_>>();
         let mut iteration = 0;
-        let mut accumulator = GradientsAccumulator::new();
+        // Labeled from the start so __chain_mut can track the label across accumulate() calls.
+        let mut accumulator: Labeled<GradientsAccumulator<LC::Model>, L> = Labeled::new(GradientsAccumulator::new());
         let mut accumulation_current = 0;
 
         let accumulation = self.grad_accumulation.unwrap_or(1);
@@ -104,6 +105,8 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
                 let (labeled_grads, labeled_item) = item.output
                     .map(|o| (o.grads.to_device(&device_main, &learner.model()), o.item))
                     .split();
+                // __chain_mut unwraps labeled_grads, gives &mut inner to accumulate(),
+                // then reassigns accumulator with label joined with labeled_grads' label.
                 fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
                 progress_items.push(labeled_item);
             }
@@ -111,8 +114,10 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
             accumulation_current += 1;
 
             if accumulation <= accumulation_current {
-                let grads = accumulator.grads();
-                learner.optimizer_step(grads);
+                // grads() resets the accumulator internally; __chain_mut reassigns
+                // accumulator (now empty) and returns Labeled<GradientsParams, L>.
+                let labeled_grads_combined = fcall!(GradientsAccumulator::grads(&mut accumulator));
+                fcall!(Learner::optimizer_step(&mut *learner, labeled_grads_combined));
                 accumulation_current = 0;
             }
 
