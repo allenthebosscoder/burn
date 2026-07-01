@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use typing_rules::*; // import filament ifc
-use macros::{fcall, mcall};
+use macros::fcall;
 
 /// The record of the learner's model.
 pub type LearnerModelRecord = ModuleRecord;
@@ -93,13 +93,15 @@ impl<LC: LearningComponentsTypes, L: Label> Learner<LC, L> {
     /// preserving the IFC label on the model.
     pub fn optimizer_step(&mut self, grads: GradientsParams) {
         let model = Clone::clone(&self.model);
-        self.model = fcall!(TrainStep::optimize(model, &mut self.optim, self.lr, grads));
+        let lr = self.lr; // pre-extract: can't borrow self.lr and &mut self.optim simultaneously
+        self.model = fcall!(TrainStep::optimize(model, &mut self.optim, lr, grads));
     }
 
     /// Optimize with multiple gradient sets, preserving the IFC label on the model.
     pub fn optimizer_step_multi(&mut self, grads: MultiGradientsParams) {
         let model = Clone::clone(&self.model);
-        self.model = fcall!(TrainStep::optimize_multi(model, &mut self.optim, self.lr, grads));
+        let lr = self.lr; // pre-extract: can't borrow self.lr and &mut self.optim simultaneously
+        self.model = fcall!(TrainStep::optimize_multi(model, &mut self.optim, lr, grads));
     }
 
     /// Load the module state from a record, preserving the IFC label on the model.
@@ -166,7 +168,7 @@ impl<LC: LearningComponentsTypes> LearningCheckpointer<LC> {
                 }
                 CheckpointingAction::Save => {
                     self.model
-                        .save(epoch, declassify(mcall!(learner.model.into_record())))
+                        .save(epoch, declassify(Clone::clone(&learner.model)).into_record())
                         .expect("Can save model checkpoint.");
                     self.optim
                         .save(epoch, learner.optim.to_record())

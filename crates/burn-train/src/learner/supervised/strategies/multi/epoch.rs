@@ -7,8 +7,7 @@ use crate::{
 };
 use burn_core::data::dataloader::Progress;
 use burn_core::tensor::Device;
-use burn_optim::GradientsAccumulator;
-use burn_optim::MultiGradientsParams;
+use burn_optim::{GradientsAccumulator, GradientsParams, MultiGradientsParams};
 use typing_rules::*; // import filament ifc
 use macros::fcall; // import ifc macros
 
@@ -36,7 +35,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
     #[allow(clippy::too_many_arguments)]
     pub fn run(
         &self,
-        learner: &mut Learner<LC>,
+        learner: &mut Learner<LC, L>,
         global_progress: &Progress,
         event_processor: &mut SupervisedTrainingEventProcessor<LC>,
         interrupter: &Interrupter,
@@ -63,7 +62,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
 
     fn run_optim_main(
         &self,
-        learner: &mut Learner<LC>,
+        learner: &mut Learner<LC, L>,
         global_progress: &Progress,
         event_processor: &mut SupervisedTrainingEventProcessor<LC>,
         interrupter: &Interrupter,
@@ -93,7 +92,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
         let device_main = devices.first().expect("A minimum of one device.").clone();
 
         loop {
-            let (items, progress) = step.step(iterators.as_mut_slice(), &learner.model());
+            let (items, progress) = step.step(iterators.as_mut_slice(), &learner.model);
             if items.is_empty() {
                 break;
             }
@@ -102,12 +101,13 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
 
             let mut progress_items = Vec::with_capacity(items.len());
             for item in items.into_iter() {
-                let (labeled_grads, labeled_item) = item.output
-                    .map(|o| (o.grads.to_device(&device_main, &learner.model()), o.item))
-                    .split();
+                // Decompose labeled output into grads and item (pure structural split).
+                let (labeled_raw_grads, labeled_item) = item.output.map(|o| (o.grads, o.item)).split();
+                // Move grads to main device; fcall! passes &LC::Model via __chain_ref on learner.model.
+                let labeled_grads = fcall!(GradientsParams::to_device(labeled_raw_grads, (&device_main), &learner.model));
                 // __chain_mut unwraps labeled_grads, gives &mut inner to accumulate(),
                 // then reassigns accumulator with label joined with labeled_grads' label.
-                fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
+                fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model, labeled_grads));
                 progress_items.push(labeled_item);
             }
 
@@ -136,7 +136,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
 
     fn run_optim_distr(
         &self,
-        learner: &mut Learner<LC>,
+        learner: &mut Learner<LC, L>,
         global_progress: &Progress,
         event_processor: &mut SupervisedTrainingEventProcessor<LC>,
         interrupter: &Interrupter,
@@ -164,7 +164,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
         let step = MultiDevicesTrainStep::<LC, L>::new(&devices);
 
         loop {
-            let (items, progress) = step.step(iterators.as_mut_slice(), &learner.model());
+            let (items, progress) = step.step(iterators.as_mut_slice(), &learner.model);
             if items.is_empty() {
                 break;
             }
@@ -175,7 +175,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
             for item in items.into_iter() {
                 let accumulator = &mut accumulators[item.device_id];
                 let (labeled_grads, labeled_item) = item.output.map(|o| (o.grads, o.item)).split();
-                fcall!(GradientsAccumulator::accumulate(accumulator, &learner.model(), labeled_grads));
+                fcall!(GradientsAccumulator::accumulate(accumulator, &learner.model, labeled_grads));
                 progress_items.push(labeled_item);
             }
 

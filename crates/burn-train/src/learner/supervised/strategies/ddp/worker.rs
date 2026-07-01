@@ -19,7 +19,7 @@ where
     L: Label,
 {
     device: Device,
-    learner: Learner<LC>,
+    learner: Learner<LC, L>,
     event_processor: Arc<Mutex<SupervisedTrainingEventProcessor<LC>>>,
     components: WorkerComponents,
     checkpointer: Option<LearningCheckpointer<LC>>,
@@ -39,7 +39,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         device: Device,
-        learner: Learner<LC>,
+        learner: Learner<LC, L>,
         event_processor: Arc<Mutex<SupervisedTrainingEventProcessor<LC>>>,
         components: WorkerComponents,
         checkpointer: Option<LearningCheckpointer<LC>>,
@@ -48,7 +48,7 @@ where
         starting_epoch: usize,
         peer_count: usize,
         is_main: bool,
-    ) -> JoinHandle<<LC as LearningComponentsTypes>::Model> {
+    ) -> JoinHandle<Labeled<<LC as LearningComponentsTypes>::Model, L>> {
         let worker = Self {
             device,
             learner,
@@ -66,11 +66,10 @@ where
     }
 
     /// Fits the model,
-    pub fn fit(mut self) -> <LC as LearningComponentsTypes>::Model {
+    pub fn fit(mut self) -> Labeled<<LC as LearningComponentsTypes>::Model, L> {
         let num_epochs = self.components.num_epochs;
         let interrupter = self.components.interrupter;
 
-        // Changed the train epoch to keep the dataloaders
         let epoch_train = DdpTrainEpoch::<LC, L>::new(
             self.dataloader_train.clone(),
             self.components.grad_accumulation,
@@ -126,7 +125,7 @@ where
                 }
                 let mut event_processor = self.event_processor.lock().unwrap();
                 runner.run(
-                    &self.learner.model(),
+                    self.learner.model(),
                     &training_progress,
                     &mut event_processor,
                     &interrupter,

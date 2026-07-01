@@ -22,11 +22,11 @@ impl<LC: LearningComponentsTypes, L: Label> SupervisedLearningStrategy<LC, L> fo
     fn fit(
         &self,
         training_components: TrainingComponents<LC>,
-        mut learner: Learner<LC>,
+        mut learner: Learner<LC, L>,
         dataloader_train: TrainLoader<LC, L>,
         dataloader_valid: ValidLoader<LC, L>,
         starting_epoch: usize,
-    ) -> (TrainingModel<LC>, SupervisedTrainingEventProcessor<LC>) {
+    ) -> (Labeled<TrainingModel<LC>, L>, SupervisedTrainingEventProcessor<LC>) {
         let main_device = self.devices.first().unwrap();
 
         // `MultiDevicesTrainStep` has one worker per device, so we use a fixed device strategy

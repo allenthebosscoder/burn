@@ -10,7 +10,7 @@ use crate::{
 };
 use burn_core::tensor::distributed::{DistributedConfig, DistributedContext};
 use burn_core::{module::AutodiffModule, prelude::Device};
-use macros::{fcall, mcall};
+use macros::mcall;
 use std::sync::Arc;
 use typing_rules::*; // import filament ifc
 
@@ -159,9 +159,7 @@ pub trait SupervisedLearningStrategy<LC: LearningComponentsTypes, L: Label> {
         // Signal training end. For the TUI renderer, this handles the exit & return to main screen.
         event_processor.process_train(LearnerEvent::End(summary));
 
-        // Strip autodiff backend while keeping the IFC label.
-        // The caller (training.rs) holds the labeled model and declassifies it before saving.
-        let labeled_model = fcall!(AutodiffModule::valid(labeled_model));
+        let labeled_model = mcall!(labeled_model.valid());
         let renderer = event_processor.renderer();
 
         LearningResult::<Labeled<InferenceModel<LC>, L>> { model: labeled_model, renderer }

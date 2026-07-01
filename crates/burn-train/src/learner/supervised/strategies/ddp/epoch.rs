@@ -3,7 +3,7 @@ use burn_core::module::AutodiffModule;
 use burn_optim::GradientsAccumulator;
 use std::sync::{Arc, Mutex};
 use typing_rules::*; // import filament ifc
-use macros::fcall; // import ifc macros
+use macros::{fcall, mcall}; // import ifc macros
 
 use crate::SupervisedTrainingEventProcessor;
 use crate::learner::base::Interrupter;
@@ -32,14 +32,14 @@ impl<LC: LearningComponentsTypes, L: Label> DdpValidEpoch<LC, L> {
     /// * `processor` - The event processor to use.
     pub fn run(
         &self,
-        model: &<LC as LearningComponentsTypes>::Model,
+        model: Labeled<<LC as LearningComponentsTypes>::Model, L>,
         global_progress: &Progress,
         processor: &mut SupervisedTrainingEventProcessor<LC>,
         interrupter: &Interrupter,
     ) {
         let epoch = global_progress.items_processed;
         log::info!("Executing validation step for epoch {}", epoch);
-        let model = model.valid();
+        let model = mcall!(model.valid());
 
         let mut iterator = self.dataloader.iter();
         let mut iteration = 0;
@@ -102,8 +102,7 @@ impl<LC: LearningComponentsTypes, L: Label> DdpTrainEpoch<LC, L> {
             progress.items_processed *= peer_count;
             progress.items_total *= peer_count;
 
-            //let item = learner.train_step(item);
-            let item = fcall!(Learner::train_step(&learner, item));
+            let item = learner.train_step(item);
             let (labeled_grads, labeled_item) = item.map(|o| (o.grads, o.item)).split();
 
             match self.grad_accumulation {

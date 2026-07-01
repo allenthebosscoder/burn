@@ -7,7 +7,7 @@ use crate::{
 use burn_core::data::dataloader::Progress;
 use burn_core::module::AutodiffModule;
 use burn_optim::GradientsAccumulator;
-use macros::fcall; // import ifc macros
+use macros::{fcall, mcall}; // import ifc macros
 use typing_rules::*; // import filament ifc
 
 /// A validation epoch.
@@ -39,8 +39,8 @@ impl<LC: LearningComponentsTypes, L: Label> SingleDeviceValidEpoch<LC, L> {
     ) {
         let epoch = global_progress.items_processed;
         log::info!("Executing validation step for epoch {}", epoch);
-        // model() returns Labeled<Model, L>; fcall! strips autodiff while preserving the label.
-        let model = fcall!(AutodiffModule::valid(learner.model()));
+        let labeled_model = learner.model();
+        let model = mcall!(labeled_model.valid());
 
         let mut iterator = self.dataloader.iter();
         let mut iteration = 0;
@@ -84,7 +84,7 @@ impl<LC: LearningComponentsTypes, L: Label> SingleDeviceTrainEpoch<LC, L> {
         let epoch = global_progress.items_processed;
         log::info!("Executing training step for epoch {}", epoch,);
 
-        // Single device / dataloader
+
         let mut iterator = self.dataloader.iter();
         let mut iteration = 0;
         // Labeled from the start so __chain_mut can track the label across accumulate() calls.

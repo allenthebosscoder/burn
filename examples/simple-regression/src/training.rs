@@ -44,7 +44,7 @@ pub fn run(artifact_dir: &str, device: impl Into<Device>) {
     device.seed(config.seed);
     let autodiff_device = device.clone().autodiff();
 
-    let model = RegressionModelConfig::new().init(&autodiff_device);
+    let model = Labeled::<_, Secret>::new(RegressionModelConfig::new().init(&autodiff_device));
 
     // Define train/valid datasets and dataloaders
     let train_dataset = HousingDataset::<Secret>::train();
@@ -82,8 +82,8 @@ pub fn run(artifact_dir: &str, device: impl Into<Device>) {
         .save(format!("{artifact_dir}/config.json").as_str())
         .unwrap();
 
-    result
-        .model
+    // Declassify at the trust boundary: saving to disk is an explicit, auditable action.
+    declassify(result.model)
         .into_record()
         .save(format!("{artifact_dir}/model"))
         .expect("Failed to save trained model");

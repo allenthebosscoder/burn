@@ -28,6 +28,7 @@ use burn_core::store::ModuleRecord;
 use burn_core::tensor::Device;
 use burn_optim::OptimizerRecord;
 use burn_optim::lr_scheduler::{LrScheduler, LrSchedulerRecord};
+use macros::mcall;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -371,7 +372,7 @@ where
     L: Label,
 {
     /// Launch this training with the given [Learner](Learner).
-    pub fn launch(mut self, learner: Learner<LC>) -> LearningResult<InferenceModel<LC>> {
+    pub fn launch(mut self, learner: Learner<LC, L>) -> LearningResult<Labeled<InferenceModel<LC>, L>> {
         if self.tracing_logger.is_some()
             && let Err(e) = self.tracing_logger.as_ref().unwrap().install()
         {
@@ -425,10 +426,11 @@ where
             summary,
         };
 
-        // Default to single device based on model
+        // Default to single device based on model.
+        // devices() returns public hardware info — safe to declassify.
         let training_strategy = self.training_strategy.unwrap_or(TrainingStrategy::Default(
             ExecutionStrategy::SingleDevice(autodiff_device(
-                learner.model.devices()[0].clone(),
+                declassify(mcall!(learner.model.devices()))[0].clone(),
                 self.grad_checkpointing,
             )),
         ));
