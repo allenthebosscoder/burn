@@ -47,7 +47,7 @@ impl<LC: LearningComponentsTypes> SingleDeviceValidEpoch<LC> {
             let progress = iterator.progress();
             iteration += 1;
 
-            let item = model.step(declassify(item));
+            let item = fcall!(model.step(item));
             let item = TrainingItem::new(item, progress, Some(iteration), None);
 
             processor.process_valid(LearnerEvent::ProcessedItem(item));
@@ -94,7 +94,7 @@ impl<LC: LearningComponentsTypes> SingleDeviceTrainEpoch<LC> {
             log::info!("Iteration {iteration}");
 
             let progress = iterator.progress();
-            let item = learner.train_step(declassify(item));
+            let item = fcall!(learner.train_step(item));
 
             match self.grad_accumulation {
                 Some(accumulation) => {

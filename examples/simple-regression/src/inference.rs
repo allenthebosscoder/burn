@@ -16,8 +16,7 @@ use typing_rules::*;
 
 pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
     let device = device.into();
-    let record = NoStdTrainingRecorder::new()
-        .load(format!("{artifact_dir}/model").into(), &device)
+    let record = ModuleRecord::load(format!("{artifact_dir}/model"))
         .expect("Trained model should exist; run train first");
 
     let model = RegressionModelConfig::new()
@@ -30,9 +29,8 @@ pub fn infer(artifact_dir: &str, device: impl Into<Device>) {
 
     let batcher = HousingBatcher::new(&device);
     let batch = batcher.batch(items.clone(), &device);
-    let batch = batch;
-    let predicted = fcall!(model.forward(batch.inputs));
-    let targets = batch.targets;
+
+    let (predicted, targets) = fcall!(run_forward(batch, &model)).split();
 
     // Display the predicted vs expected values.
     let predicted = predicted.squeeze_dim::<1>(1).into_data();

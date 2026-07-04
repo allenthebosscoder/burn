@@ -50,7 +50,7 @@ impl RegressionModel {
 
     pub fn forward_step(&self, item: HousingBatch) -> RegressionOutput {
         let targets: Tensor<2> = item.targets.unsqueeze_dim(1);
-        let output: Tensor<2> = self.forward(item.inputs);
+        let output: Tensor<2> = fcall!(self.forward(item.inputs));
 
         let loss = MseLoss::new().forward(output.clone(), targets.clone(), Mean);
 
@@ -63,8 +63,8 @@ impl RegressionModel {
 }
 
 impl TrainStep for RegressionModel {
-    type Input = HousingBatch;
-    type Output = RegressionOutput;
+    type Input = Labeled<HousingBatch, L>;
+    type Output = Labeled<RegressionOutput, L>;
 
     fn step(&self, item: HousingBatch) -> TrainOutput<RegressionOutput> {
         let item = self.forward_step(item);
@@ -74,10 +74,10 @@ impl TrainStep for RegressionModel {
 }
 
 impl InferenceStep for RegressionModel {
-    type Input = HousingBatch;
-    type Output = RegressionOutput;
+    type Input = Labeled<HousingBatch, L>;
+    type Output = Labeled<RegressionOutput, L>;
 
-    fn step(&self, item: HousingBatch) -> RegressionOutput {
-        self.forward_step(item)
+    fn step(&self, item: Labeled<HousingBatch, L>) -> Labeled<RegressionOutput, L> {
+        fcall!(self.forward_step(item))
     }
 }

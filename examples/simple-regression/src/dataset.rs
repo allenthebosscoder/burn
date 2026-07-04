@@ -85,7 +85,7 @@ impl<L> HousingDataset<L> where L: Label, {
 
     pub fn new(split: &str) -> Self {
         let dataset: Labeled<SqliteDataset<HousingDistrictItem, L>, L> =
-            HuggingfaceDatasetLoader::new("gvlassis/california_housing")
+            HuggingfaceDatasetLoader::Labeled::new("gvlassis/california_housing")
                 .dataset(split)
                 .unwrap();
 
@@ -95,9 +95,9 @@ impl<L> HousingDataset<L> where L: Label, {
 
 /// Normalizer for the housing dataset.
 #[derive(Clone, Debug)]
-pub struct Normalizer {
-    pub min: Tensor<2>,
-    pub max: Tensor<2>,
+pub struct Normalizer<L: Label> {
+    pub min: Labeled<Tensor<2>, L>,
+    pub max: Labeled<Tensor<2>, L>,
 }
 
 impl Normalizer {
@@ -123,14 +123,14 @@ impl Normalizer {
 }
 
 #[derive(Clone, Debug)]
-pub struct HousingBatcher {
-    normalizer: Normalizer,
+pub struct HousingBatcher<L: Label> {
+    normalizer: Labeled<Normalizer, L>,
 }
 
 #[derive(Clone, Debug)]
-pub struct HousingBatch {
-    pub inputs: Tensor<2>,
-    pub targets: Tensor<1>,
+pub struct HousingBatch<L: Label> {
+    pub inputs: Labeled<Tensor<2>, L>,
+    pub targets: Labeled<Tensor<1>, L>,
 }
 
 impl HousingBatcher {
@@ -141,13 +141,10 @@ impl HousingBatcher {
     }
 }
 
-impl Batcher<HousingDistrictItem, HousingBatch, A> for HousingBatcher {
-    fn batch(&self, items: Vec<Labeled<HousingDistrictItem, A>>, device: &Device) -> Labeled<HousingBatch, A> {
-        let raw_items = items.into_iter().map(declassify).collect::<Vec<_>>();
-        let mut inputs: Vec<Tensor<2>> = Vec::new();
-
-        for item in raw_items.iter() {
-            let input_tensor = Tensor::<1>::from_floats(
+impl<L: Label> Batcher<HousingDistrictItem, HousingBatch, L> for HousingBatcher {
+    fn batch(&self, items: Vec<Labeled<HousingDistrictItem, L>>, device: &Device) -> Labeled<HousingBatch, L> {
+        let inputs = items.iter().copied()
+            .map(|item| fcall!(Tensor::<1>::from_floats(
                 [
                     item.median_income,
                     item.house_age,
@@ -159,21 +156,17 @@ impl Batcher<HousingDistrictItem, HousingBatch, A> for HousingBatcher {
                     item.longitude,
                 ],
                 device,
-            );
+            ).unsqueeze()))
+            .reduce(|a, b| fcall!(Tensor::cat(vec!(a,b), 0)))
+            .unwrap();
+        let normalizer = self.normalizer.to_device(device);
+        let inputs = mcall!(normalizer.normalize(inputs));
 
-            inputs.push(input_tensor.unsqueeze());
-        }
+        let targets = items
+            .iter().copied()
+            .map(|item| fcall!(Tensor::<1>::from_floats([item.median_house_value], device)))
+            .reduce(|a,b| fcall!(Tensor::cat(vec!(a,b), 0))).unwrap();
 
-        let inputs = Tensor::cat(inputs, 0);
-        let inputs = self.normalizer.to_device(device).normalize(inputs);
-
-        let targets = raw_items
-            .iter()
-            .map(|item| Tensor::<1>::from_floats([item.median_house_value], device))
-            .collect();
-
-        let targets = Tensor::cat(targets, 0);
-
-        Labeled::<HousingBatch, A>::new(HousingBatch { inputs, targets })
+        fcall!(Labeled<HousingBatch { inputs, targets }, L>)
     }
 }

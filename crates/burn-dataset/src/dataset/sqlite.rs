@@ -98,7 +98,8 @@ pub struct SqliteDataset<I, L: Label> {
     len: usize,
     select_statement: String,
     row_serialized: bool,
-    phantom: PhantomData<I>,
+    phantom: PhantomData<Labeled<I, L>>,
+    
 }
 
 impl<I, L: Label> SqliteDataset<I, L> {
