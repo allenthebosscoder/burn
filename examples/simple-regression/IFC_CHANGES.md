@@ -399,7 +399,7 @@ intermediaries. The macro extensions handle all the labeled-to-raw translation:
 
 ### `src/training.rs`
 
-**What changed:** Applied the `Secret` label when constructing train and validation datasets.
+**What changed:** (1) Applied the `Secret` label when constructing train and validation datasets. (2) The model itself is now labeled `Secret` at creation. (3) The final trained model is declassified explicitly before saving to disk.
 
 **Burn context:** In burn, training is driven by a `SupervisedTraining` coordinator that owns
 a train dataloader and a valid dataloader. These dataloaders pull batches from the dataset
@@ -409,17 +409,45 @@ construction time, every batch that flows through training and validation carrie
 label — the type system enforces that gradients and loss values derived from Secret data cannot
 escape without declassification.
 
-**Before** (`src/training.rs:49-50`):
+**Before** (`src/training.rs:47-89`):
 ```rust
+let model = RegressionModelConfig::new().init(&autodiff_device);  // unlabeled
+
 let train_dataset = HousingDataset::train();
 let valid_dataset = HousingDataset::validation();
+
+// ...
+let result = training.launch(Learner::new(model, config.optimizer.init(), 1e-3));
+
+// result.model: InferenceModel (unlabeled — no declassify needed)
+result.model
+    .into_record()
+    .save(format!("{artifact_dir}/model"))
+    .expect("Failed to save trained model");
 ```
 
-**After** ([`src/training.rs:49-50`](src/training.rs#L49-L50)):
+**After** ([`src/training.rs:47-89`](src/training.rs#L47-L89)):
 ```rust
+// Label the model Secret at creation — weights will carry training-data sensitivity.
+let model = Labeled::<_, Secret>::new(RegressionModelConfig::new().init(&autodiff_device));
+
 let train_dataset = HousingDataset::<Secret>::train();
 let valid_dataset = HousingDataset::<Secret>::validation();
+
+// ...
+let result = training.launch(Learner::new(model, config.optimizer.init(), 1e-3));
+// result.model: Labeled<InferenceModel, Secret>
+
+// Declassify at the trust boundary: saving to disk is an explicit, auditable action.
+declassify(result.model)
+    .into_record()
+    .save(format!("{artifact_dir}/model"))
+    .expect("Failed to save trained model");
 ```
+
+**Why the model is labeled at creation:** `Learner::new` in burn-train now takes a `Labeled<M, L>` model. This means the model's weights carry the `Secret` label throughout training. Every gradient update that flows from the Secret training data into the model is tracked — the compiler ensures the labeled model cannot be saved or handed to non-IFC code without an explicit `declassify`.
+
+**Why `declassify` at the save, not earlier:** `result.model` is `Labeled<InferenceModel, Secret>`. Calling `into_record()` and `.save()` directly on it would be a type error — these methods expect a raw `InferenceModel`. `declassify` is the explicit decision point: *"we are intentionally making the trained weights public by writing them to disk."* Declassifying earlier (before `launch` returns, or at some intermediate step) would be incorrect because it would remove the label before the model has finished its labeled lifecycle.
 
 ---
 

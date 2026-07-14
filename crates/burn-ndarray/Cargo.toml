@@ -69,12 +69,14 @@ atomic_float = { workspace = true }
 blas-src = { workspace = true, default-features = false, optional = true }      # no-std compatible
 const-random = { workspace = true }
 libm = { workspace = true }
+macros = { path = "../../fg_ifc_library/macros" }
 matrixmultiply = { workspace = true, default-features = false }
 ndarray = { workspace = true }
 num-traits = { workspace = true }
 openblas-src = { workspace = true, optional = true }
 paste = { workspace = true }
 rand = { workspace = true, default-features = false }
+typing_rules = { path = "../../fg_ifc_library/typing_rules" }
 
 # SIMD
 bytemuck = { workspace = true, optional = true }

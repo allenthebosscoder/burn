@@ -718,6 +718,282 @@ fcall!(Learner::optimizer_step(&mut *learner, labeled_grads));
 
 ---
 
+### `src/learner/base.rs` (new)
+
+**What changed:** `Learner<LC, L>` now stores `model: Labeled<LC::Model, L>`. All model operations (`fork`, `train_step`, `optimizer_step`, `load_model`) go through `fcall!`. Checkpoint save calls `declassify` at the explicit trust boundary.
+
+**Why:** Gradients computed from `Secret` training data flow into the model weights during `optimizer_step`. Without labeling the model, the type system cannot prove that weights carry training-data sensitivity. With `model: Labeled<LC::Model, L>`, the compiler enforces this throughout training.
+
+**Before/After — struct** ([`src/learner/base.rs:30-35`](crates/burn-train/src/learner/base.rs#L30-L35)):
+
+```rust
+// Before
+pub struct Learner<LC: LearningComponentsTypes> {
+    pub(crate) model: LC::Model,
+    ...
+}
+
+// After
+pub struct Learner<LC: LearningComponentsTypes, L: Label> {
+    pub(crate) model: Labeled<LC::Model, L>,
+    ...
+}
+```
+
+`Learner::new` now takes a pre-labeled model ([`base.rs:55`](crates/burn-train/src/learner/base.rs#L55)):
+
+```rust
+// Before
+pub fn new(model: M, optim: ..., lr_scheduler: ...) -> Self
+
+// After
+pub fn new(model: Labeled<M, L>, optim: ..., lr_scheduler: ...) -> Self
+```
+
+`optimizer_step` uses `fcall!` with a pre-extracted `lr` ([`base.rs:94-98`](crates/burn-train/src/learner/base.rs#L94-L98)):
+
+```rust
+// Before
+pub fn optimizer_step(&mut self, grads: GradientsParams) {
+    self.model = self.model.optimize(&mut self.optim, self.lr, grads);
+}
+
+// After
+pub fn optimizer_step(&mut self, grads: GradientsParams) {
+    let model = Clone::clone(&self.model);
+    let lr = self.lr; // pre-extract: can't borrow self.lr and &mut self.optim simultaneously
+    self.model = fcall!(TrainStep::optimize(model, &mut self.optim, lr, grads));
+}
+```
+
+`Clone::clone(&self.model)` pre-clones the labeled model before the `fcall!` because `fcall!` generates closures that capture references — `model` and `&mut self.optim` in the same closure would conflict with `self.lr`. Extracting both `model` and `lr` to locals first breaks all three borrows apart.
+
+Checkpoint save is the explicit trust boundary ([`base.rs:171`](crates/burn-train/src/learner/base.rs#L171)):
+
+```rust
+self.model
+    .save(epoch, declassify(Clone::clone(&learner.model)).into_record())
+    .expect("Can save model checkpoint.");
+```
+
+`declassify` is correct here: writing a checkpoint to disk is an auditable public output. `Clone::clone` is needed because `into_record()` consumes the model by value, so we clone before declassifying rather than consuming the live model.
+
+---
+
+### `src/learner/supervised/strategies/base.rs` (new)
+
+**What changed:** `fit()` now returns `(Labeled<TrainingModel<LC>, L>, ...)` and the default `train()` implementation returns `LearningResult<Labeled<InferenceModel<LC>, L>>`. The labeled model stays wrapped through `to_string()` and `valid()`.
+
+**Before:**
+
+```rust
+fn fit(...) -> (LC::Model, SupervisedTrainingEventProcessor<LC>);
+fn train(...) -> LearningResult<InferenceModel<LC>>;
+```
+
+**After** ([`src/learner/supervised/strategies/base.rs:130-176`](crates/burn-train/src/learner/supervised/strategies/base.rs#L130-L176)):
+
+```rust
+fn fit(...) -> (Labeled<TrainingModel<LC>, L>, SupervisedTrainingEventProcessor<LC>);
+
+fn train(...) -> LearningResult<Labeled<InferenceModel<LC>, L>> {
+    let (labeled_model, mut event_processor) = self.fit(...);
+
+    let summary = summary_config.and_then(|summary| {
+        summary.init()
+            // Declassify only to produce the UI summary string.
+            // Architecture (layer names, shapes) is determined by config, not training data — safe.
+            .map(|summary| summary.with_model(declassify(mcall!(labeled_model.to_string()))))
+            .ok()
+    });
+
+    event_processor.process_train(LearnerEvent::End(summary));
+
+    let labeled_model = mcall!(labeled_model.valid());
+    LearningResult::<Labeled<InferenceModel<LC>, L>> { model: labeled_model, renderer }
+}
+```
+
+Two `mcall!` uses:
+
+1. **`mcall!(labeled_model.to_string())`** — `to_string()` is `&self` on `Display`, so `mcall!` correctly borrows via `__chain_ref`. Result is `Labeled<String, L>`. `declassify` strips to raw `String` for the UI — the architecture string is public metadata (determined by config, not training data).
+
+2. **`mcall!(labeled_model.valid())`** — `AutodiffModule::valid(&self) -> Self` is a `&self` method. `mcall!` uses `__chain_ref` on the receiver, calls `valid()` on `&inner`, and rewraps. Produces `Labeled<InferenceModel<LC>, L>`. Using `fcall!` would fail here: `valid` is a method, not a UFCS free function.
+
+---
+
+### `src/learner/supervised/step/train.rs` (update)
+
+**Additional changes beyond what was previously documented:**
+
+The `Message` struct and `Worker` now carry the labeled model through the inter-thread channel so the model never leaves the IFC-tracked world when dispatched to workers:
+
+**Before/After — `Message`** ([`train.rs:18-21`](crates/burn-train/src/learner/supervised/step/train.rs#L18-L21)):
+
+```rust
+// Before (no IFC)
+struct Message<M, TI> {
+    item: TI,
+    model: M,  // plain, unlabeled
+}
+
+// After
+struct Message<M, TI, L: Label> {
+    item: TI,
+    model: Labeled<M, L>,  // stays Secret through the channel
+}
+```
+
+`step()` now accepts `&Labeled<TrainingModel<LC>, L>` directly ([`train.rs:121-135`](crates/burn-train/src/learner/supervised/step/train.rs#L121-L135)):
+
+```rust
+// Before: model extracted from learner inside step()
+pub fn step(..., learner: &Learner<LC, L>) -> (...) {
+    worker.register(item, learner.model());
+}
+
+// After
+pub fn step(..., model: &Labeled<TrainingModel<LC>, L>) -> (...) {
+    worker.register(item, Clone::clone(model));
+}
+```
+
+Inside the worker thread, `fork()` is called via `fcall!` because `Module::fork(self, &Device) -> Self` is consuming. `mcall!` would only borrow via `__chain_ref` — wrong for a consuming method:
+
+```rust
+// Before
+let model = item.model.fork(&device);
+
+// After (train.rs:52)
+// fork() consumes self, so fcall! (owned chain) is correct.
+let model = fcall!(Module::fork(item.model, (&device)));
+```
+
+The `(&device)` parenthesization makes it `Expr::Paren` → `ChainKind::Owned` → the `SecureChain<&Device, Public> for &Device` blanket handles it. Without the parens, `&device` triggers `ChainKind::Ref` → `SecureChainRef`, which requires a different blanket that does not exist for plain `&Device`.
+
+---
+
+### `src/learner/supervised/strategies/multi/epoch.rs` (correction)
+
+**Correction to previously documented code:**
+
+An earlier version of this section showed `to_device` inside the `.map()` closure. The current code separates it into a standalone `fcall!` call, and uses `&learner.model` (field reference) rather than `learner.model()` (method call that clones):
+
+```rust
+// What was documented earlier (now incorrect):
+let (labeled_grads, labeled_item) = item.output
+    .map(|o| (o.grads.to_device(&device_main, &learner.model()), o.item))
+    .split();
+fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model(), labeled_grads));
+
+// Actual current code (epoch.rs:105-111):
+let (labeled_raw_grads, labeled_item) = item.output.map(|o| (o.grads, o.item)).split();
+let labeled_grads = fcall!(GradientsParams::to_device(labeled_raw_grads, (&device_main), &learner.model));
+fcall!(GradientsAccumulator::accumulate(&mut accumulator, &learner.model, labeled_grads));
+```
+
+**Why `to_device` was moved out of `.map()`:** Inside a `.map()` closure, the model reference passed to `to_device` is outside the IFC chain — `.map()` operates on the owned inner `T`, so any labeled reference to `learner.model` inside is not tracked by the macro. Moving `to_device` to a separate `fcall!` line gives it access to `&learner.model` as a labeled argument.
+
+**Why `&learner.model` (field) instead of `learner.model()` (method):** `learner.model()` clones and returns `Labeled<LC::Model, L>` — an owned copy. Since only a reference is needed for `to_device` and `accumulate`, directly borrowing the field avoids an unnecessary clone.
+
+`step.step()` also uses `&learner.model` ([`epoch.rs:95`](crates/burn-train/src/learner/supervised/strategies/multi/epoch.rs#L95)):
+
+```rust
+let (items, progress) = step.step(iterators.as_mut_slice(), &learner.model);
+```
+
+---
+
+### `src/learner/supervised/strategies/ddp/epoch.rs` (update)
+
+**Additional change:** `DdpValidEpoch::run` now takes `model: Labeled<LC::Model, L>` by value (instead of a reference) so `mcall!(model.valid())` can produce a labeled inference model cleanly:
+
+```rust
+// Before
+pub fn run(&self, model: &LC::Model, ...) {
+    let model = model.valid();
+    ...
+}
+
+// After
+pub fn run(
+    &self,
+    model: Labeled<<LC as LearningComponentsTypes>::Model, L>,
+    ...
+) {
+    let model = mcall!(model.valid());
+    ...
+}
+```
+
+`mcall!` uses `__chain_ref` on the receiver — it borrows the inner model, calls `valid(&self)`, and rewraps as `Labeled<InferenceModel<LC>, L>`. Taking the labeled model by value (not by reference) lets the `Labeled` wrapper be consumed cleanly by the chain.
+
+---
+
+### `src/learner/supervised/strategies/ddp/worker.rs` (new)
+
+**What changed:** The thread handle and `fit()` return type now carry the labeled model.
+
+**Before:**
+
+```rust
+pub fn start(...) -> JoinHandle<LC::Model>
+pub fn fit(mut self) -> LC::Model
+```
+
+**After** ([`worker.rs:51`](crates/burn-train/src/learner/supervised/strategies/ddp/worker.rs#L51) and [`worker.rs:69`](crates/burn-train/src/learner/supervised/strategies/ddp/worker.rs#L69)):
+
+```rust
+pub fn start(...) -> JoinHandle<Labeled<<LC as LearningComponentsTypes>::Model, L>>
+pub fn fit(mut self) -> Labeled<<LC as LearningComponentsTypes>::Model, L>
+```
+
+`fit()` returns `self.learner.model()` — the labeled model after training. The `DdpTrainingStrategy` receives `Labeled<LC::Model, L>` from the thread join.
+
+`DdpValidEpoch::run` is called with the model by value so that `run()` can call `mcall!(model.valid())` inside ([`worker.rs:128`](crates/burn-train/src/learner/supervised/strategies/ddp/worker.rs#L128)):
+
+```rust
+// Before
+runner.run(&self.learner.model(), ...);  // reference
+
+// After
+runner.run(self.learner.model(), ...);   // owned — consumed by run() to call valid()
+```
+
+---
+
+### `src/learner/supervised/paradigm.rs` (update)
+
+**Additional changes beyond the previously documented `LearningComponentsMarker` fix:**
+
+`launch()` now returns `LearningResult<Labeled<InferenceModel<LC>, L>>` ([`paradigm.rs:375`](crates/burn-train/src/learner/supervised/paradigm.rs#L375)):
+
+```rust
+// Before
+pub fn launch(mut self, learner: Learner<LC, L>) -> LearningResult<InferenceModel<LC>>
+
+// After
+pub fn launch(mut self, learner: Learner<LC, L>) -> LearningResult<Labeled<InferenceModel<LC>, L>>
+```
+
+When selecting the default device, `devices()` is called via `mcall!` on the labeled model field ([`paradigm.rs:431-436`](crates/burn-train/src/learner/supervised/paradigm.rs#L431-L436)):
+
+```rust
+// Before
+ExecutionStrategy::SingleDevice(autodiff_device(learner.model.devices()[0].clone(), ...))
+
+// After
+// devices() returns public hardware info — safe to declassify.
+ExecutionStrategy::SingleDevice(autodiff_device(
+    declassify(mcall!(learner.model.devices()))[0].clone(),
+    self.grad_checkpointing,
+))
+```
+
+`mcall!(learner.model.devices())`: `Module::devices(&self) -> Vec<Device>` is a `&self` method, so `mcall!` borrows via `__chain_ref` and rewraps as `Labeled<Vec<Device>, L>`. `declassify` strips the label to access the raw `Vec<Device>` — device names and IDs are hardware metadata, not derived from training data.
+
+---
+
 ## The Core Pattern
 
 ```

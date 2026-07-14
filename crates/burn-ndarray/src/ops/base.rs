@@ -13,6 +13,8 @@ use ndarray::{Array2, ArrayD};
 use num_traits::Signed;
 #[cfg(feature = "simd")]
 use paste::paste;
+use typing_rules::*; // import filament ifc
+use macros::{mcall};
 
 #[cfg(not(feature = "std"))]
 #[allow(unused_imports)]
@@ -1094,6 +1096,20 @@ where
                 }
             })
             .into_shared()
+    }
+
+    pub(crate) fn sign_op_safe<L> (tensor: SharedArray<Labeled<E, L>>) -> SharedArray<Labeled<E, L>>
+    where
+        E: Signed,
+        L: Label,
+    {
+        let one: Labeled<E, L> = Labeled::new(1.elem::<E>());
+        
+        tensor.mapv(|x| {
+            let pos_mask = mcall!(x.is_positive()).map(|b| (b as i32).elem::<E>());
+            let neg_mask = mcall!(x.is_negative()).map(|b| (b as i32).elem::<E>());
+            pos_mask * one - neg_mask * one
+        }).into_shared()
     }
 }
 
