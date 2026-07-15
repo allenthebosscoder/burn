@@ -1,18 +1,18 @@
-use crate::{LearningComponentsTypes, TrainingModel};
+use crate::LearnerModel;
 use crate::{TrainOutput, TrainStep, TrainingModelInput, TrainingModelOutput};
 use burn_core::data::dataloader::DataLoaderIterator;
-use burn_core::data::dataloader::Progress;
 use burn_core::module::Module;
+use burn_core::data::dataloader::Progress;
 use burn_core::tensor::Device;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::spawn;
 use typing_rules::*; // import filament ifc
-use macros::{fcall, mcall}; // import ifc macros
+use macros::fcall; // import ifc macros
 
 /// Multi devices train step.
-pub struct MultiDevicesTrainStep<LC: LearningComponentsTypes, L: Label> {
-    workers: Vec<Worker<LC, L>>,
-    receiver: Receiver<MultiTrainOutput<TrainingModelOutput<LC>, L>>,
+pub struct MultiDevicesTrainStep<M: LearnerModel, L: Label> {
+    workers: Vec<Worker<M, L>>,
+    receiver: Receiver<MultiTrainOutput<TrainingModelOutput<M>, L>>,
 }
 
 struct Message<M, TI, L: Label> {
@@ -20,16 +20,16 @@ struct Message<M, TI, L: Label> {
     model: Labeled<M, L>,
 }
 
-struct Worker<LC: LearningComponentsTypes, L: Label> {
+struct Worker<M: LearnerModel, L: Label> {
     // Not that complex. Extracting into another type would only make it more confusing.
     // #[allow(clippy::type_complexity)]
-    sender_input: Sender<Message<TrainingModel<LC>, Labeled<TrainingModelInput<LC>, L>, L>>,
+    sender_input: Sender<Message<M, Labeled<TrainingModelInput<M>, L>, L>>,
     device: Device,
     device_id: usize,
 }
 
-impl<LC: LearningComponentsTypes, L: Label> Worker<LC, L> {
-    fn register(&self, item: Labeled<TrainingModelInput<LC>, L>, model: Labeled<TrainingModel<LC>, L>) {
+impl<M: LearnerModel, L: Label> Worker<M, L> {
+    fn register(&self, item: Labeled<TrainingModelInput<M>, L>, model: Labeled<M, L>) {
         let message = Message { item, model };
         self.sender_input.send(message).unwrap();
     }
@@ -38,8 +38,8 @@ impl<LC: LearningComponentsTypes, L: Label> Worker<LC, L> {
     // #[allow(clippy::type_complexity)]
     fn start(
         &self,
-        sender_output: Sender<MultiTrainOutput<TrainingModelOutput<LC>, L>>,
-        receiver_input: Receiver<Message<TrainingModel<LC>, Labeled<TrainingModelInput<LC>, L>, L>>,
+        sender_output: Sender<MultiTrainOutput<TrainingModelOutput<M>, L>>,
+        receiver_input: Receiver<Message<M, Labeled<TrainingModelInput<M>, L>, L>>,
     ) {
         let device = self.device.clone();
         let device_id = self.device_id;
@@ -51,7 +51,9 @@ impl<LC: LearningComponentsTypes, L: Label> Worker<LC, L> {
                         // fork() consumes self, so fcall! (owned chain) is used instead of mcall!.
                         let model = fcall!(Module::fork(item.model, (&device)));
                         let input = item.item;
-                        let output: Labeled<_, _> = mcall!(model.step(input));
+                        // TrainStep::step is named the same as InferenceStep::step, so it must be
+                        // called UFCS-qualified (same pattern as Learner::train_step in base.rs).
+                        let output: Labeled<_, _> = fcall!(TrainStep::step(&model, input));
                         let item = MultiTrainOutput { output, device_id };
 
                         sender_output.send(item).unwrap();
@@ -74,7 +76,7 @@ pub struct MultiTrainOutput<TO, L: Label> {
     pub(crate) device_id: usize,
 }
 
-impl<LC: LearningComponentsTypes, L: Label> MultiDevicesTrainStep<LC, L> {
+impl<M: LearnerModel, L: Label> MultiDevicesTrainStep<M, L> {
     /// Create a new multi devices train step.
     ///
     /// # Arguments
@@ -120,9 +122,9 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDevicesTrainStep<LC, L> {
     /// Outputs.
     pub fn step<'a>(
         &self,
-        dataloaders: &mut [Box<dyn DataLoaderIterator<TrainingModelInput<LC>, L> + 'a>],
-        model: &Labeled<TrainingModel<LC>, L>,
-    ) -> (Vec<MultiTrainOutput<TrainingModelOutput<LC>, L>>, Progress) {
+        dataloaders: &mut [Box<dyn DataLoaderIterator<TrainingModelInput<M>, L> + 'a>],
+        model: &Labeled<M, L>,
+    ) -> (Vec<MultiTrainOutput<TrainingModelOutput<M>, L>>, Progress) {
         let mut num_send = 0;
 
         let mut items_total = 0;

@@ -6,6 +6,10 @@ use burn_backend::tensor::FloatTensor;
 use burn_backend::{TensorMetadata, element::cast::ToElement};
 use burn_std::{BoolDType, IntDType};
 
+// Filament ifc
+use typing_rules::*; 
+use macros::{mcall};
+
 // Current crate
 use super::{
     NdArrayMathOps, NdArrayOps,
@@ -43,6 +47,20 @@ fn round_ties_even_wrapper(x: f64) -> f64 {
     } else {
         x.round()
     }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(dead_code)]
+fn round_ties_even_wrapper_safe<L: Label> (x: Labeled<f64, L>) -> Labeled<f64, L> {
+    let frac = x - mcall!(x.floor());
+    let is_tie: Labeled<f64, L> = Labeled::new((frac == 0.5) as i32 as f64);
+    let not_tie = 1.0 - is_tie;
+
+    let half_x = x * 0.5;
+    let tie_result = mcall!(half_x.round()) * 2.0;
+    let non_tie_result = mcall!(x.round());
+
+    is_tie * tie_result + (1.0 - is_tie) * non_tie_result
 }
 
 impl FloatTensorOps<Self> for NdArray {

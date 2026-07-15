@@ -1,5 +1,4 @@
 use burn_core::data::dataloader::Progress;
-use burn_core::module::AutodiffModule;
 use burn_optim::GradientsAccumulator;
 use std::sync::{Arc, Mutex};
 use typing_rules::*; // import filament ifc
@@ -8,22 +7,22 @@ use macros::{fcall, mcall}; // import ifc macros
 use crate::SupervisedTrainingEventProcessor;
 use crate::learner::base::Interrupter;
 use crate::metric::processor::{EventProcessorTraining, LearnerEvent, TrainingItem};
-use crate::{InferenceStep, Learner, LearningComponentsTypes, TrainLoader, ValidLoader};
+use crate::{InferenceStep, Learner, LearnerModel, TrainLoader, ValidLoader};
 
 /// A validation epoch.
 #[derive(new)]
-pub struct DdpValidEpoch<LC: LearningComponentsTypes, L: Label> {
-    dataloader: ValidLoader<LC, L>,
+pub struct DdpValidEpoch<M: LearnerModel, L: Label> {
+    dataloader: ValidLoader<M, L>,
 }
 
 /// A training epoch.
 #[derive(new)]
-pub struct DdpTrainEpoch<LC: LearningComponentsTypes, L: Label> {
-    dataloader: TrainLoader<LC, L>,
+pub struct DdpTrainEpoch<M: LearnerModel, L: Label> {
+    dataloader: TrainLoader<M, L>,
     grad_accumulation: Option<usize>,
 }
 
-impl<LC: LearningComponentsTypes, L: Label> DdpValidEpoch<LC, L> {
+impl<M: LearnerModel, L: Label> DdpValidEpoch<M, L> {
     /// Runs the validation epoch.
     ///
     /// # Arguments
@@ -32,9 +31,9 @@ impl<LC: LearningComponentsTypes, L: Label> DdpValidEpoch<LC, L> {
     /// * `processor` - The event processor to use.
     pub fn run(
         &self,
-        model: Labeled<<LC as LearningComponentsTypes>::Model, L>,
+        model: Labeled<M, L>,
         global_progress: &Progress,
-        processor: &mut SupervisedTrainingEventProcessor<LC>,
+        processor: &mut SupervisedTrainingEventProcessor<M>,
         interrupter: &Interrupter,
     ) {
         let epoch = global_progress.items_processed;
@@ -61,7 +60,7 @@ impl<LC: LearningComponentsTypes, L: Label> DdpValidEpoch<LC, L> {
     }
 }
 
-impl<LC: LearningComponentsTypes, L: Label> DdpTrainEpoch<LC, L> {
+impl<M: LearnerModel, L: Label> DdpTrainEpoch<M, L> {
     /// Runs the training epoch.
     ///
     /// # Arguments
@@ -76,9 +75,9 @@ impl<LC: LearningComponentsTypes, L: Label> DdpTrainEpoch<LC, L> {
     /// The trained model and the optimizer.
     pub fn run(
         &self,
-        learner: &mut Learner<LC, L>,
+        learner: &mut Learner<M, L>,
         global_progress: &Progress,
-        processor: Arc<Mutex<SupervisedTrainingEventProcessor<LC>>>,
+        processor: Arc<Mutex<SupervisedTrainingEventProcessor<M>>>,
         interrupter: &Interrupter,
         peer_count: usize,
     ) {
@@ -88,7 +87,7 @@ impl<LC: LearningComponentsTypes, L: Label> DdpTrainEpoch<LC, L> {
         let mut iterator = self.dataloader.iter();
         let mut iteration = 0;
         // Labeled from the start so __chain_mut can track the label across accumulate() calls.
-        let mut accumulator: Labeled<GradientsAccumulator<LC::Model>, L> = Labeled::new(GradientsAccumulator::new());
+        let mut accumulator: Labeled<GradientsAccumulator<M>, L> = Labeled::new(GradientsAccumulator::new());
         let mut accumulation_current = 0;
 
         while let Some(item) = iterator.next() {

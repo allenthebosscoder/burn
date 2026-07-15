@@ -2,8 +2,7 @@ use crate::learner::base::Interrupter;
 use crate::metric::processor::{EventProcessorTraining, LearnerEvent, TrainingItem};
 use crate::train::MultiDevicesTrainStep;
 use crate::{
-    Learner, LearningComponentsTypes, MultiDeviceOptim, SupervisedTrainingEventProcessor,
-    TrainLoader,
+    Learner, LearnerModel, MultiDeviceOptim, SupervisedTrainingEventProcessor, TrainLoader,
 };
 use burn_core::data::dataloader::Progress;
 use burn_core::tensor::Device;
@@ -13,12 +12,12 @@ use macros::fcall; // import ifc macros
 
 /// A training epoch.
 #[derive(new)]
-pub struct MultiDeviceTrainEpoch<LC: LearningComponentsTypes, L: Label> {
-    dataloaders: Vec<TrainLoader<LC, L>>,
+pub struct MultiDeviceTrainEpoch<M: LearnerModel, L: Label> {
+    dataloaders: Vec<TrainLoader<M, L>>,
     grad_accumulation: Option<usize>,
 }
 
-impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
+impl<M: LearnerModel, L: Label> MultiDeviceTrainEpoch<M, L> {
     /// Runs the training epoch on multiple devices.
     ///
     /// # Arguments
@@ -35,9 +34,9 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
     #[allow(clippy::too_many_arguments)]
     pub fn run(
         &self,
-        learner: &mut Learner<LC, L>,
+        learner: &mut Learner<M, L>,
         global_progress: &Progress,
-        event_processor: &mut SupervisedTrainingEventProcessor<LC>,
+        event_processor: &mut SupervisedTrainingEventProcessor<M>,
         interrupter: &Interrupter,
         devices: Vec<Device>,
         strategy: MultiDeviceOptim,
@@ -62,9 +61,9 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
 
     fn run_optim_main(
         &self,
-        learner: &mut Learner<LC, L>,
+        learner: &mut Learner<M, L>,
         global_progress: &Progress,
-        event_processor: &mut SupervisedTrainingEventProcessor<LC>,
+        event_processor: &mut SupervisedTrainingEventProcessor<M>,
         interrupter: &Interrupter,
         devices: Vec<Device>,
     ) {
@@ -82,11 +81,11 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
             .collect::<Vec<_>>();
         let mut iteration = 0;
         // Labeled from the start so __chain_mut can track the label across accumulate() calls.
-        let mut accumulator: Labeled<GradientsAccumulator<LC::Model>, L> = Labeled::new(GradientsAccumulator::new());
+        let mut accumulator: Labeled<GradientsAccumulator<M>, L> = Labeled::new(GradientsAccumulator::new());
         let mut accumulation_current = 0;
 
         let accumulation = self.grad_accumulation.unwrap_or(1);
-        let step = MultiDevicesTrainStep::<LC, L>::new(&devices);
+        let step = MultiDevicesTrainStep::<M, L>::new(&devices);
 
         // The main device is always the first in the list.
         let device_main = devices.first().expect("A minimum of one device.").clone();
@@ -136,9 +135,9 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
 
     fn run_optim_distr(
         &self,
-        learner: &mut Learner<LC, L>,
+        learner: &mut Learner<M, L>,
         global_progress: &Progress,
-        event_processor: &mut SupervisedTrainingEventProcessor<LC>,
+        event_processor: &mut SupervisedTrainingEventProcessor<M>,
         interrupter: &Interrupter,
         devices: Vec<Device>,
     ) {
@@ -161,7 +160,7 @@ impl<LC: LearningComponentsTypes, L: Label> MultiDeviceTrainEpoch<LC, L> {
         let mut accumulation_current = 0;
 
         let accumulation = self.grad_accumulation.unwrap_or(1);
-        let step = MultiDevicesTrainStep::<LC, L>::new(&devices);
+        let step = MultiDevicesTrainStep::<M, L>::new(&devices);
 
         loop {
             let (items, progress) = step.step(iterators.as_mut_slice(), &learner.model);

@@ -3,8 +3,8 @@ use crate::ddp::strategy::WorkerComponents;
 use crate::metric::processor::{EventProcessorTraining, LearnerEvent};
 use crate::single::TrainingLoop;
 use crate::{
-    Learner, LearningCheckpointer, LearningComponentsTypes, SupervisedTrainingEventProcessor,
-    TrainLoader, ValidLoader,
+    Learner, LearnerModel, LearningCheckpointer, SupervisedTrainingEventProcessor, TrainLoader,
+    ValidLoader,
 };
 use burn_core::tensor::Device;
 use std::sync::{Arc, Mutex};
@@ -13,42 +13,42 @@ use typing_rules::*; // import filament ifc
 
 /// A worker runs the model, syncing gradients using collective operations.
 /// Event processing and validation is optional too.
-pub(crate) struct DdpWorker<LC, L>
+pub(crate) struct DdpWorker<M, L>
 where
-    LC: LearningComponentsTypes + Send + 'static,
+    M: LearnerModel + Send + 'static,
     L: Label,
 {
     device: Device,
-    learner: Learner<LC, L>,
-    event_processor: Arc<Mutex<SupervisedTrainingEventProcessor<LC>>>,
+    learner: Learner<M, L>,
+    event_processor: Arc<Mutex<SupervisedTrainingEventProcessor<M>>>,
     components: WorkerComponents,
-    checkpointer: Option<LearningCheckpointer<LC>>,
-    dataloader_train: TrainLoader<LC, L>,
-    dataloader_valid: Option<ValidLoader<LC, L>>,
+    checkpointer: Option<LearningCheckpointer<M>>,
+    dataloader_train: TrainLoader<M, L>,
+    dataloader_valid: Option<ValidLoader<M, L>>,
     starting_epoch: usize,
     peer_count: usize,
     is_main: bool,
 }
 
-impl<LC, L> DdpWorker<LC, L>
+impl<M, L> DdpWorker<M, L>
 where
-    LC: LearningComponentsTypes + Send + 'static,
-    L: Label
+    M: LearnerModel + Send + 'static,
+    L: Label,
 {
     /// Starts a worker that runs the model in a data distributed parallel
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         device: Device,
-        learner: Learner<LC, L>,
-        event_processor: Arc<Mutex<SupervisedTrainingEventProcessor<LC>>>,
+        learner: Learner<M, L>,
+        event_processor: Arc<Mutex<SupervisedTrainingEventProcessor<M>>>,
         components: WorkerComponents,
-        checkpointer: Option<LearningCheckpointer<LC>>,
-        dataloader_train: TrainLoader<LC, L>,
-        dataloader_valid: Option<ValidLoader<LC, L>>,
+        checkpointer: Option<LearningCheckpointer<M>>,
+        dataloader_train: TrainLoader<M, L>,
+        dataloader_valid: Option<ValidLoader<M, L>>,
         starting_epoch: usize,
         peer_count: usize,
         is_main: bool,
-    ) -> JoinHandle<Labeled<<LC as LearningComponentsTypes>::Model, L>> {
+    ) -> JoinHandle<Labeled<M, L>> {
         let worker = Self {
             device,
             learner,
@@ -66,17 +66,17 @@ where
     }
 
     /// Fits the model,
-    pub fn fit(mut self) -> Labeled<<LC as LearningComponentsTypes>::Model, L> {
+    pub fn fit(mut self) -> Labeled<M, L> {
         let num_epochs = self.components.num_epochs;
         let interrupter = self.components.interrupter;
 
-        let epoch_train = DdpTrainEpoch::<LC, L>::new(
+        let epoch_train = DdpTrainEpoch::<M, L>::new(
             self.dataloader_train.clone(),
             self.components.grad_accumulation,
         );
         let epoch_valid = self
             .dataloader_valid
-            .map(|dataloader| DdpValidEpoch::<LC, L>::new(dataloader));
+            .map(|dataloader| DdpValidEpoch::<M, L>::new(dataloader));
         self.learner.fork(&self.device);
         self.learner.grad_sharded();
 
