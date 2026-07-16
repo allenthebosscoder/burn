@@ -19,6 +19,9 @@ use crate::{
 
 use serde::{Deserialize, Serialize};
 
+use macros::{fcall, mcall};
+use typing_rules::*;
+
 /// Data structure for tensors.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TensorData {
@@ -504,6 +507,136 @@ impl TensorData {
                 DType::QFloat(_) => unreachable!(),
             }
         }
+    }
+
+    fn get_dtype(t: TensorData) -> DType {
+        t.dtype
+    }
+
+    fn get_shape(t: TensorData) -> Shape {
+        t.shape
+    }
+
+    fn get_num_elements(t: TensorData) -> usize {
+        t.num_elements()
+    }
+
+    fn get_bytes_vec(t: TensorData) -> Vec<u8> {
+        t.bytes.to_vec()
+    }
+
+    fn ct_eq_dtype_raw(secret: DType, candidate: DType) -> bool {
+        secret == candidate
+    }
+
+    /// Plain-arg wrapper: keeps the secret dtype labeled all the way through the comparison.
+    fn ct_eq_dtype<L: Label>(secret_dtype: Labeled<DType, L>, candidate: DType) -> Labeled<bool, L> {
+        fcall!(Self::ct_eq_dtype_raw(secret_dtype, candidate))
+    }
+
+    /// Plain, unlabeled worker for `ct_select` -- same role as `convert_inplace_dtype`/
+    /// `convert_clone_dtype`: ordinary code that `fcall!` calls, no `Labeled` types involved.
+    fn ct_select_raw(cond: bool, a: TensorData, b: TensorData) -> TensorData {
+        let mask = (cond as u8).wrapping_neg();
+        let b_bytes = b.bytes.to_vec();
+        let mut bytes = a.bytes.to_vec();
+        for i in 0..bytes.len() {
+            bytes[i] = (mask & bytes[i]) | (!mask & b_bytes[i]);
+        }
+        TensorData { bytes: Bytes::from_bytes_vec(bytes), shape: a.shape, dtype: a.dtype }
+    }
+
+    /// Figure 2's `ct_select`: picks `a` if `cond`, else `b`, via a branchless byte mask.
+    fn ct_select<L: Label>(cond: Labeled<bool, L>, a: Labeled<TensorData, L>, b: Labeled<TensorData, L>) -> Labeled<TensorData, L> {
+        fcall!(Self::ct_select_raw(cond, a, b))
+    }
+
+    /// Every element is padded to this many bytes, regardless of its logical dtype, so any
+    /// candidate width is always safe to read from it.
+    const MAX_ELEM_WIDTH: usize = 8;
+
+    /// Extracts the first `width` bytes of every `MAX_ELEM_WIDTH`-byte padded slot, packed
+    /// contiguously -- always valid to call for any `width`, since padding guarantees the
+    /// source always has enough bytes.
+    fn unpad(padded: &[u8], num_elements: usize, width: usize) -> Vec<u8> {
+        let mut out = ::alloc::vec![0u8; num_elements * width];
+        for i in 0..num_elements {
+            let src = i * Self::MAX_ELEM_WIDTH;
+            out[i * width..(i + 1) * width].copy_from_slice(&padded[src..src + width]);
+        }
+        out
+    }
+
+    /// IFC-safe `convert_dtype`: runs every conversion candidate unconditionally, then
+    /// branchlessly selects the one matching the secret `self.dtype`. Only `convert_clone_dtype`
+    /// is used -- unlike `convert_inplace_dtype`, it never requires the source and target
+    /// widths to match, so it needs no extra guard here.
+    pub fn convert_dtype_safe<L: Label>(tensor: Labeled<TensorData, L>, dtype: DType) -> Labeled<TensorData, L> {
+        let self_dtype: Labeled<DType, L> = fcall!(TensorData::get_dtype(tensor.clone()));
+        let shape: Shape = declassify(fcall!(TensorData::get_shape(tensor.clone())));
+        let num_elements: usize = declassify(fcall!(TensorData::get_num_elements(tensor.clone())));
+        let padded: Labeled<Vec<u8>, L> = fcall!(TensorData::get_bytes_vec(tensor));
+
+        macro_rules! candidate_input {
+            ($width:expr, $candidate_dtype:expr) => {
+                padded.clone().map(|p| TensorData {
+                    bytes: Bytes::from_bytes_vec(Self::unpad(&p, num_elements, $width)),
+                    shape: shape.clone(),
+                    dtype: $candidate_dtype,
+                })
+            };
+        }
+
+        let mut answer = candidate_input!(dtype.size(), dtype); // self-unchanged, starting value
+
+        let is_f64 = Self::ct_eq_dtype(self_dtype.clone(), DType::F64);
+        answer = Self::ct_select(is_f64, fcall!(TensorData::convert_clone_dtype::<f64>(candidate_input!(8, <f64 as Element>::dtype()), dtype)), answer);
+
+        let is_f32 = Self::ct_eq_dtype(self_dtype.clone(), DType::F32).labeled_or(Self::ct_eq_dtype(self_dtype.clone(), DType::Flex32));
+        answer = Self::ct_select(is_f32, fcall!(TensorData::convert_clone_dtype::<f32>(candidate_input!(4, <f32 as Element>::dtype()), dtype)), answer);
+
+        let is_f16 = Self::ct_eq_dtype(self_dtype.clone(), DType::F16);
+        answer = Self::ct_select(is_f16, fcall!(TensorData::convert_clone_dtype::<f16>(candidate_input!(2, <f16 as Element>::dtype()), dtype)), answer);
+
+        let is_bf16 = Self::ct_eq_dtype(self_dtype.clone(), DType::BF16);
+        answer = Self::ct_select(is_bf16, fcall!(TensorData::convert_clone_dtype::<bf16>(candidate_input!(2, <bf16 as Element>::dtype()), dtype)), answer);
+
+        let is_i64 = Self::ct_eq_dtype(self_dtype.clone(), DType::I64);
+        answer = Self::ct_select(is_i64, fcall!(TensorData::convert_clone_dtype::<i64>(candidate_input!(8, <i64 as Element>::dtype()), dtype)), answer);
+
+        let is_i32 = Self::ct_eq_dtype(self_dtype.clone(), DType::I32);
+        answer = Self::ct_select(is_i32, fcall!(TensorData::convert_clone_dtype::<i32>(candidate_input!(4, <i32 as Element>::dtype()), dtype)), answer);
+
+        let is_i16 = Self::ct_eq_dtype(self_dtype.clone(), DType::I16);
+        answer = Self::ct_select(is_i16, fcall!(TensorData::convert_clone_dtype::<i16>(candidate_input!(2, <i16 as Element>::dtype()), dtype)), answer);
+
+        let is_i8 = Self::ct_eq_dtype(self_dtype.clone(), DType::I8);
+        answer = Self::ct_select(is_i8, fcall!(TensorData::convert_clone_dtype::<i8>(candidate_input!(1, <i8 as Element>::dtype()), dtype)), answer);
+
+        let is_u64 = Self::ct_eq_dtype(self_dtype.clone(), DType::U64);
+        answer = Self::ct_select(is_u64, fcall!(TensorData::convert_clone_dtype::<u64>(candidate_input!(8, <u64 as Element>::dtype()), dtype)), answer);
+
+        let is_u32 = Self::ct_eq_dtype(self_dtype.clone(), DType::U32);
+        answer = Self::ct_select(is_u32, fcall!(TensorData::convert_clone_dtype::<u32>(candidate_input!(4, <u32 as Element>::dtype()), dtype)), answer);
+
+        let is_u16 = Self::ct_eq_dtype(self_dtype.clone(), DType::U16);
+        answer = Self::ct_select(is_u16, fcall!(TensorData::convert_clone_dtype::<u16>(candidate_input!(2, <u16 as Element>::dtype()), dtype)), answer);
+
+        let is_u8 = Self::ct_eq_dtype(self_dtype.clone(), DType::U8);
+        answer = Self::ct_select(is_u8, fcall!(TensorData::convert_clone_dtype::<u8>(candidate_input!(1, <u8 as Element>::dtype()), dtype)), answer);
+
+        let is_bool_native = Self::ct_eq_dtype(self_dtype.clone(), DType::Bool(BoolStore::Native));
+        answer = Self::ct_select(is_bool_native, fcall!(TensorData::convert_clone_dtype::<bool>(candidate_input!(1, <bool as Element>::dtype()), dtype)), answer);
+
+        let is_bool_u8 = Self::ct_eq_dtype(self_dtype.clone(), DType::Bool(BoolStore::U8));
+        answer = Self::ct_select(is_bool_u8, fcall!(TensorData::convert_clone_dtype::<u8>(candidate_input!(1, DType::Bool(BoolStore::U8)), dtype)), answer);
+
+        let is_bool_u32 = Self::ct_eq_dtype(self_dtype.clone(), DType::Bool(BoolStore::U32));
+        answer = Self::ct_select(is_bool_u32, fcall!(TensorData::convert_clone_dtype::<u32>(candidate_input!(4, DType::Bool(BoolStore::U32)), dtype)), answer);
+
+        answer = Self::ct_select(Labeled::new(false), candidate_input!(dtype.size(), dtype), answer); // QFloat placeholder
+
+        answer
     }
 
     fn convert_inplace_dtype<Current: Element + AnyBitPattern>(self, dtype: DType) -> Self {

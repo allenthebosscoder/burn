@@ -29,6 +29,7 @@ bytemuck = { workspace = true, features = ["extern_crate_alloc"] }
 derive-new = { workspace = true }
 enumset = { workspace = true }
 half = { workspace = true, features = ["bytemuck"] }
+macros = { path = "../../fg_ifc_library/macros" }
 num-traits = { workspace = true }
 rand = { workspace = true, default-features = false }
 rand_distr = { workspace = true }
@@ -36,6 +37,7 @@ serde = { workspace = true }
 smallvec = { workspace = true, features = ["serde"] }
 spin = { workspace = true }
 thiserror = { workspace = true }
+typing_rules = { path = "../../fg_ifc_library/typing_rules" }
 
 # ParamId
 data-encoding = { workspace = true }
